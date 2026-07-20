@@ -47,7 +47,10 @@ st.markdown("""
 @st.cache_resource(ttl=3600)
 def _get_gc():
     try:
-        raw = st.secrets.get("GOOGLE_CREDENTIALS_JSON") or os.environ.get("GOOGLE_CREDENTIALS_JSON","")
+        if "GOOGLE_CREDENTIALS_JSON" in st.secrets:
+            raw = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+        else:
+            raw = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
         if isinstance(raw, str) and raw.strip():
             info = json.loads(raw)
         elif hasattr(raw, "_asdict"):      # Streamlit AttrDict from secrets.toml
