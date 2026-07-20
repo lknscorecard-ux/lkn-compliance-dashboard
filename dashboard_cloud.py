@@ -19,6 +19,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build as gcp_build
 import gspread
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -30,9 +31,13 @@ st.set_page_config(
 )
 
 RESULTS_SHEET_ID = os.environ.get("RESULTS_SHEET_ID", "")
+PROJECT_ID  = "compliance-501910"
+REGION      = "europe-west2"
+JOB_NAME    = "lkn-pipeline"
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
     "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/cloud-platform",
 ]
 
 st.markdown("""
@@ -45,10 +50,19 @@ st.markdown("""
 
 # ── Auth ────────────────────────────────────────────────────────────────────────
 @st.cache_resource(ttl=3600)
-def _get_gc():
+def _get_creds():
     info = dict(st.secrets["gcp_service_account"])
-    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
-    return gspread.authorize(creds)
+    return Credentials.from_service_account_info(info, scopes=SCOPES)
+
+def _get_gc():
+    return gspread.authorize(_get_creds())
+
+def _trigger_pipeline():
+    creds = _get_creds()
+    svc = gcp_build("run", "v1", credentials=creds, cache_discovery=False)
+    name = f"namespaces/{PROJECT_ID}/jobs/{JOB_NAME}"
+    svc.namespaces().jobs().run(name=name).execute()
+
 
 
 @st.cache_data(ttl=300, show_spinner="Refreshing data …")
@@ -75,12 +89,17 @@ col_h1, col_h2, col_h3 = st.columns([3, 1, 1])
 with col_h1:
     st.title("🍗 LKN Compliance Dashboard")
 with col_h2:
-    if st.button("🔄 Refresh Now"):
+    if st.button("▶ Run Pipeline Now", type="primary", use_container_width=True):
+        with st.spinner("Triggering pipeline …"):
+            try:
+                _trigger_pipeline()
+                st.success("Pipeline started! Results update in ~2 min.")
+            except Exception as e:
+                st.error(f"Failed: {e}")
+with col_h3:
+    if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
-with col_h3:
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.caption("Auto-refreshes every 5 min")
 
 # ── Load all sheets ─────────────────────────────────────────────────────────────
 compliance    = _load_safe("Compliance Gap")
