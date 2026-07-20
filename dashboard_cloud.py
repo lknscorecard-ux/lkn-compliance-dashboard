@@ -202,7 +202,8 @@ with tab2:
         with f2:
             sel_st = st.selectbox("Status", ["All","Surplus","Deficit","Exact"])
         with f3:
-            skus   = ["All"] + sorted(compliance["SKU"].dropna().unique().tolist())
+            sku_col = "SKU" if "SKU" in compliance.columns else compliance.columns[2]
+            skus   = ["All"] + sorted(compliance[sku_col].dropna().unique().tolist())
             sel_sk = st.selectbox("SKU", skus)
 
         disp = compliance.copy()
@@ -215,7 +216,7 @@ with tab2:
             return f"background-color: {c.get(val,'')}"
 
         st.dataframe(
-            disp.style.applymap(_status_bg, subset=["Status"] if "Status" in disp.columns else []),
+            disp.style.map(_status_bg, subset=["Status"]) if "Status" in disp.columns else disp.style,
             use_container_width=True, height=500
         )
         st.caption(f"{len(disp):,} rows")
