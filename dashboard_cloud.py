@@ -197,13 +197,13 @@ with tab2:
     if not compliance.empty:
         f1, f2, f3 = st.columns(3)
         with f1:
-            sites = ["All"] + sorted(compliance["Site_Key"].dropna().unique().tolist())
+            sites = ["All"] + sorted(compliance["Site_Key"].dropna().astype(str).unique().tolist())
             sel   = st.selectbox("Site", sites)
         with f2:
             sel_st = st.selectbox("Status", ["All","Surplus","Deficit","Exact"])
         with f3:
             sku_col = "SKU" if "SKU" in compliance.columns else compliance.columns[2]
-            skus   = ["All"] + sorted(compliance[sku_col].dropna().unique().tolist())
+            skus   = ["All"] + sorted(compliance[sku_col].dropna().astype(str).unique().tolist())
             sel_sk = st.selectbox("SKU", skus)
 
         disp = compliance.copy()
