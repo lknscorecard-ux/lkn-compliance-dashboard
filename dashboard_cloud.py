@@ -46,14 +46,7 @@ st.markdown("""
 # ── Auth ────────────────────────────────────────────────────────────────────────
 @st.cache_resource(ttl=3600)
 def _get_gc():
-    raw = st.secrets["GOOGLE_CREDENTIALS_JSON"]
-    if isinstance(raw, str):
-        info = json.loads(raw)
-    else:
-        # Streamlit parsed the JSON into an AttrDict — convert to plain dict
-        info = dict(raw)
-        if "private_key" not in info:
-            info = {k: (dict(v) if hasattr(v, "_asdict") else v) for k, v in info.items()}
+    info = dict(st.secrets["gcp_service_account"])
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
 
