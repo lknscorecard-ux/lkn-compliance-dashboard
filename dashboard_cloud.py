@@ -58,10 +58,13 @@ def _get_gc():
     return gspread.authorize(_get_creds())
 
 def _trigger_pipeline():
+    import google.auth.transport.requests, requests as _requests
     creds = _get_creds()
-    svc = gcp_build("run", "v1", credentials=creds, cache_discovery=False)
-    name = f"namespaces/{PROJECT_ID}/jobs/{JOB_NAME}"
-    svc.namespaces().jobs().run(name=name).execute()
+    creds.refresh(google.auth.transport.requests.Request())
+    url = f"https://{REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/{PROJECT_ID}/jobs/{JOB_NAME}:run"
+    resp = _requests.post(url, headers={"Authorization": f"Bearer {creds.token}"})
+    if not resp.ok:
+        raise Exception(resp.text)
 
 
 
