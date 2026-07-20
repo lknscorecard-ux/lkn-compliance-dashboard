@@ -188,7 +188,7 @@ with tab1:
         disp = site_summ.copy()
         if "Compliance_%" in disp.columns:
             disp["Compliance_%"] = disp["Compliance_%"].map(lambda x: f"{float(x):.1f}%")
-        styled = disp.style.applymap(_pct_color, subset=["Compliance_%"] if "Compliance_%" in disp.columns else [])
+        styled = disp.style.map(_pct_color, subset=["Compliance_%"]) if "Compliance_%" in disp.columns else disp.style
         st.dataframe(styled, use_container_width=True, height=340)
 
 # ── TAB 2: Sites ─────────────────────────────────────────────────────────────────
