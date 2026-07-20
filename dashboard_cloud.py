@@ -46,21 +46,15 @@ st.markdown("""
 # ── Auth ────────────────────────────────────────────────────────────────────────
 @st.cache_resource(ttl=3600)
 def _get_gc():
-    try:
-        if "GOOGLE_CREDENTIALS_JSON" in st.secrets:
-            raw = st.secrets["GOOGLE_CREDENTIALS_JSON"]
-        else:
-            raw = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
-        if isinstance(raw, str) and raw.strip():
-            info = json.loads(raw)
-        elif hasattr(raw, "_asdict"):      # Streamlit AttrDict from secrets.toml
-            info = dict(raw)
-        else:
-            info = raw
-        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
-    except Exception:
-        path = os.path.join(os.path.dirname(__file__), "google_credentials.json")
-        creds = Credentials.from_service_account_file(path, scopes=SCOPES)
+    raw = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+    if isinstance(raw, str):
+        info = json.loads(raw)
+    else:
+        # Streamlit parsed the JSON into an AttrDict — convert to plain dict
+        info = dict(raw)
+        if "private_key" not in info:
+            info = {k: (dict(v) if hasattr(v, "_asdict") else v) for k, v in info.items()}
+    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
 
 
