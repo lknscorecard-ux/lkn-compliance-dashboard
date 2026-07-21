@@ -45,7 +45,10 @@ def run(site_raw: pd.DataFrame, site_stock: pd.DataFrame) -> pd.DataFrame:
     ord_ = (
         site_stock
         .groupby(["Site_Key","Store_Name","Product Code","Pack_UOM"], dropna=False)
-        .agg(Ordered_Qty=("Total_Ordered_Qty","sum"))
+        .agg(
+            Ordered_Qty  =("Total_Ordered_Qty", "sum"),
+            Bidfood_Desc =("Description",        "first"),  # carry SKU description
+        )
         .reset_index()
         .rename(columns={
             "Product Code": "Product_Code",
@@ -74,6 +77,13 @@ def run(site_raw: pd.DataFrame, site_stock: pd.DataFrame) -> pd.DataFrame:
         if pd.isna(r["Site_Key"]) else r["Site_Key"],
         axis=1
     )
+
+    # Fill blank Ingredient name from Bidfood description (Bidfood-only rows)
+    compliance["Ingredient"] = compliance["Ingredient"].fillna(compliance.get("Bidfood_Desc", ""))
+    if "Bidfood_Desc" in compliance.columns:
+        blank = compliance["Ingredient"].isna() | (compliance["Ingredient"] == "")
+        compliance.loc[blank, "Ingredient"] = compliance.loc[blank, "Bidfood_Desc"]
+        compliance = compliance.drop(columns=["Bidfood_Desc"])
 
     compliance["Required_Qty"] = compliance["Required_Qty"].fillna(0)
     compliance["Ordered_Qty"]  = compliance["Ordered_Qty"].fillna(0)
