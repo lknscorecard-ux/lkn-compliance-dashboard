@@ -59,8 +59,21 @@ def run(site_raw: pd.DataFrame, site_stock: pd.DataFrame) -> pd.DataFrame:
     # ord_.Site_Key   = "Norwich - Plumstead Rd"                   ← location key
     compliance = req.merge(ord_, on=["Store_Name","Product_Code"], how="outer")
 
-    # For ingredient-only rows (no Bidfood match) use Store_Name as fallback Site_Key
-    compliance["Site_Key"] = compliance["Site_Key"].fillna(compliance["Store_Name"])
+    # Propagate Site_Key from matched rows to unmatched rows of the same Store_Name.
+    # e.g. "Fireaway Pizza (Norwich - Plumstead Rd)" matched rows carry
+    # Site_Key = "Norwich - Plumstead Rd"; unmatched rows for the same store
+    # should use that same Site_Key instead of the Store_Name string.
+    store_to_site = (
+        compliance[compliance["Site_Key"].notna()]
+        .groupby("Store_Name")["Site_Key"]
+        .first()
+        .to_dict()
+    )
+    compliance["Site_Key"] = compliance.apply(
+        lambda r: store_to_site.get(r["Store_Name"], r["Store_Name"])
+        if pd.isna(r["Site_Key"]) else r["Site_Key"],
+        axis=1
+    )
 
     compliance["Required_Qty"] = compliance["Required_Qty"].fillna(0)
     compliance["Ordered_Qty"]  = compliance["Ordered_Qty"].fillna(0)
