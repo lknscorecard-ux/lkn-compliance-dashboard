@@ -68,24 +68,31 @@ def _trigger_pipeline():
 
 
 
-@st.cache_data(ttl=300, show_spinner="Refreshing data …")
-def _load(tab: str) -> pd.DataFrame:
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_all_sheets() -> dict:
+    import time
     sid = (
         st.secrets.get("RESULTS_SHEET_ID")
         or os.environ.get("RESULTS_SHEET_ID", RESULTS_SHEET_ID)
     )
     gc = _get_gc()
-    ws = gc.open_by_key(sid).worksheet(tab)
-    records = ws.get_all_records()
-    return pd.DataFrame(records) if records else pd.DataFrame()
+    sh = gc.open_by_key(sid)
+    result = {}
+    for tab in ["Compliance Gap","Site Summary","Ingredient Requirements",
+                "Bidfood Stock","Recipe Summary","Unmatched","Run Log"]:
+        try:
+            ws = sh.worksheet(tab)
+            records = ws.get_all_records()
+            result[tab] = pd.DataFrame(records) if records else pd.DataFrame()
+        except Exception as e:
+            result[tab] = pd.DataFrame()
+        time.sleep(1)   # avoid hitting Sheets API rate limit
+    return result
 
 
 def _load_safe(tab):
-    try:
-        return _load(tab)
-    except Exception as e:
-        st.warning(f"Could not load '{tab}': {e}")
-        return pd.DataFrame()
+    data = _load_all_sheets()
+    return data.get(tab, pd.DataFrame())
 
 # ── Header ──────────────────────────────────────────────────────────────────────
 col_h1, col_h2, col_h3 = st.columns([3, 1, 1])
