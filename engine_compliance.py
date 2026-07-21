@@ -25,21 +25,23 @@ def run(site_raw: pd.DataFrame, site_stock: pd.DataFrame) -> pd.DataFrame:
                  Ordered_Qty, Ord_UOM, Gap, Status
     """
 
-    # ── Aggregate required qty per Site + SKU ─────────────────────────────────
+    # ── Aggregate required qty per Store + SKU ───────────────────────────────
+    # "Store" in site_raw = Items-wise Store column = same as mapping sheet
+    # "Store Name" column, so it joins directly to ord_.Store_Name below.
     req = (
         site_raw
         .groupby(["Store","SKU","Ingredient","UOM"], dropna=False)
         ["Total_Raw_Qty"].sum()
         .reset_index()
         .rename(columns={
-            "Store":         "Site_Key",
+            "Store":         "Store_Name",   # Items Store == Bidfood mapping Store_Name
             "SKU":           "Product_Code",
             "Total_Raw_Qty": "Required_Qty",
             "UOM":           "Req_UOM",
         })
     )
 
-    # ── Aggregate ordered qty per Site + SKU ─────────────────────────────────
+    # ── Aggregate ordered qty per Site_Key + Store_Name + SKU ────────────────
     ord_ = (
         site_stock
         .groupby(["Site_Key","Store_Name","Product Code","Pack_UOM"], dropna=False)
@@ -51,27 +53,14 @@ def run(site_raw: pd.DataFrame, site_stock: pd.DataFrame) -> pd.DataFrame:
         })
     )
 
-    # ── Remap ingredient Site_Key to match Bidfood Site_Key ──────────────────
-    # Ingredient engine uses the Store name from Items data
-    # (e.g. "Fireaway Pizza (Norwich - Plumstead Rd)") as Site_Key.
-    # Bidfood engine uses the location key from the mapping sheet
-    # (e.g. "Norwich - Plumstead Rd") as Site_Key, with Store_Name holding the
-    # brand+location string. Remap any req.Site_Key that matches a Store_Name
-    # to the corresponding Site_Key so the join works correctly.
-    store_name_to_site = (
-        ord_[["Site_Key","Store_Name"]]
-        .dropna(subset=["Store_Name"])
-        .drop_duplicates()
-        .set_index("Store_Name")["Site_Key"]
-        .to_dict()
-    )
-    valid_sites = set(ord_["Site_Key"].unique())
-    req["Site_Key"] = req["Site_Key"].apply(
-        lambda s: store_name_to_site.get(s, s) if s not in valid_sites else s
-    )
+    # ── Merge on Store_Name + SKU (outer join) ────────────────────────────────
+    # req.Store_Name  = "Fireaway Pizza (Norwich - Plumstead Rd)"
+    # ord_.Store_Name = "Fireaway Pizza (Norwich - Plumstead Rd)"  ← same
+    # ord_.Site_Key   = "Norwich - Plumstead Rd"                   ← location key
+    compliance = req.merge(ord_, on=["Store_Name","Product_Code"], how="outer")
 
-    # ── Merge outer join on Site + SKU ────────────────────────────────────────
-    compliance = req.merge(ord_, on=["Site_Key","Product_Code"], how="outer")
+    # For ingredient-only rows (no Bidfood match) use Store_Name as fallback Site_Key
+    compliance["Site_Key"] = compliance["Site_Key"].fillna(compliance["Store_Name"])
 
     compliance["Required_Qty"] = compliance["Required_Qty"].fillna(0)
     compliance["Ordered_Qty"]  = compliance["Ordered_Qty"].fillna(0)
@@ -161,7 +150,7 @@ def packaging_compliance(site_raw: pd.DataFrame, site_packaging: pd.DataFrame) -
         .groupby(["Store", "SKU", "Ingredient", "UOM"], dropna=False)
         ["Total_Raw_Qty"].sum()
         .reset_index()
-        .rename(columns={"Store": "Site_Key", "Total_Raw_Qty": "Required_Units"})
+        .rename(columns={"Store": "Store_Name", "Total_Raw_Qty": "Required_Units"})
     )
 
     # ── Fuzzy-match Ingredient -> Product_Base ────────────────────────────────
@@ -187,16 +176,23 @@ def packaging_compliance(site_raw: pd.DataFrame, site_packaging: pd.DataFrame) -
 
     pkg_req["Product_Base"] = pkg_req["Ingredient"].apply(_match_product)
 
-    # ── Aggregate ordered units per Site_Key + Product_Base ───────────────────
+    # ── Aggregate ordered units per Store_Name + Product_Base ────────────────
     ord_agg = (
+        site_packaging
+        .groupby(["Site_Key", "Store_Name", "Product_Base", "Product_Name"], dropna=False)
+        .agg(Ordered_Units=("Total_Units", "sum"))
+        .reset_index()
+    ) if "Store_Name" in site_packaging.columns else (
         site_packaging
         .groupby(["Site_Key", "Product_Base", "Product_Name"], dropna=False)
         .agg(Ordered_Units=("Total_Units", "sum"))
         .reset_index()
+        .assign(Store_Name=lambda d: d["Site_Key"])
     )
 
-    # ── Outer merge on Site_Key + Product_Base ────────────────────────────────
-    pkg_comp = pkg_req.merge(ord_agg, on=["Site_Key", "Product_Base"], how="outer")
+    # ── Outer merge on Store_Name + Product_Base ──────────────────────────────
+    pkg_comp = pkg_req.merge(ord_agg, on=["Store_Name", "Product_Base"], how="outer")
+    pkg_comp["Site_Key"] = pkg_comp.get("Site_Key", pkg_comp["Store_Name"])
 
     pkg_comp["Required_Units"] = pkg_comp["Required_Units"].fillna(0)
     pkg_comp["Ordered_Units"]  = pkg_comp["Ordered_Units"].fillna(0)
