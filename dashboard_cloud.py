@@ -234,9 +234,9 @@ with tab1:
             st.info("No site data available.")
 
     with c_deficit:
-        _gap_col   = "Portion_Gap"   if HAS_PORTIONS else "Gap"
-        _gap_label = "Portion Gap"   if HAS_PORTIONS else "Total Gap (units/g)"
-        st.subheader(f"Top 10 Deficit SKUs  ({'portions' if HAS_PORTIONS else 'units'})")
+        _gap_col   = "Portion_Gap" if HAS_PORTIONS else "Gap"
+        _unit_label = "portions" if HAS_PORTIONS else "units/g"
+        st.subheader(f"Top 10 Deficit SKUs ({_unit_label})")
 
         if not compliance.empty and "Status" in compliance.columns:
             _def_grp = (
@@ -244,21 +244,26 @@ with tab1:
                 .groupby(["SKU", "Ingredient"])
                 .agg(Total_Gap=(_gap_col, "sum"))
                 .reset_index()
-                .sort_values("Total_Gap")
-                .head(10)
+            )
+            # Use absolute deficit so bars go right and labels don't clip
+            _def_grp["Abs_Gap"] = _def_grp["Total_Gap"].abs()
+            _def_grp = (
+                _def_grp.nlargest(10, "Abs_Gap")
+                # Sort ascending → largest deficit is LAST → renders at TOP
+                .sort_values("Abs_Gap", ascending=True)
             )
             if not _def_grp.empty:
                 _fig_def = px.bar(
-                    _def_grp, x="Total_Gap", y="Ingredient",
+                    _def_grp, x="Abs_Gap", y="Ingredient",
                     orientation="h",
                     color_discrete_sequence=["#C00000"],
-                    labels={"Total_Gap": _gap_label, "Ingredient": ""},
-                    text=_def_grp["Total_Gap"].apply(lambda v: f"{v:,.1f}"),
+                    labels={"Abs_Gap": f"Deficit ({_unit_label})", "Ingredient": ""},
+                    text=_def_grp["Abs_Gap"].apply(lambda v: f"{v:,.1f}"),
                 )
                 _fig_def.update_traces(textposition="outside")
                 _fig_def.update_layout(
                     height=300,
-                    margin=dict(t=0, b=0, l=0, r=80),
+                    margin=dict(t=0, b=0, l=0, r=90),
                 )
                 st.plotly_chart(_fig_def, use_container_width=True)
             else:
@@ -274,7 +279,9 @@ with tab1:
 
         with c_top:
             st.subheader("🏆 Top 10 Compliant Sites")
-            _top10 = site_summ.nlargest(10, "Compliance_%").copy()
+            # Sort ascending so highest % is LAST → rendered at TOP by Plotly
+            _top10 = (site_summ.nlargest(10, "Compliance_%")
+                      .sort_values("Compliance_%", ascending=True).copy())
             _top10["label"] = _top10["Compliance_%"].apply(lambda x: f"{x:.1f}%")
             _fig_top = px.bar(
                 _top10, x="Compliance_%", y="Site_Key",
@@ -295,7 +302,9 @@ with tab1:
 
         with c_bot:
             st.subheader("⚠️ Bottom 10 Sites")
-            _bot10 = site_summ.nsmallest(10, "Compliance_%").copy()
+            # Sort descending so lowest % is LAST → rendered at TOP by Plotly
+            _bot10 = (site_summ.nsmallest(10, "Compliance_%")
+                      .sort_values("Compliance_%", ascending=False).copy())
             _bot10["label"] = _bot10["Compliance_%"].apply(lambda x: f"{x:.1f}%")
             _fig_bot = px.bar(
                 _bot10, x="Compliance_%", y="Site_Key",
@@ -329,12 +338,14 @@ with tab1:
                 return ""
 
         _disp = site_summ.copy()
+        _int_cols   = [c for c in ["Rank","Deficit","Surplus","Exact","Total_SKUs"] if c in _disp.columns]
+        _fmt = {c: "{:.0f}" for c in _int_cols}
         if "Compliance_%" in _disp.columns:
-            _disp["Compliance_%"] = _disp["Compliance_%"].map(lambda x: f"{float(x):.1f}%")
-
+            _fmt["Compliance_%"] = "{:.1f}%"
         _styled = (
-            _disp.style.map(_pct_color, subset=["Compliance_%"])
-            if "Compliance_%" in _disp.columns else _disp.style
+            _disp.style
+            .format(_fmt)
+            .map(_pct_color, subset=["Compliance_%"] if "Compliance_%" in _disp.columns else [])
         )
         st.dataframe(_styled, use_container_width=True, height=400)
 
@@ -363,15 +374,16 @@ with tab2:
             _sel_status = st.selectbox("Status", ["All", "Surplus", "Deficit", "Exact"],
                                        key="sites_status_filter")
         with _f3:
-            _sku_col = "SKU" if "SKU" in compliance.columns else compliance.columns[2]
-            _all_skus = (["All"]
-                         + sorted(compliance[_sku_col].dropna().astype(str).unique().tolist()))
-            _sel_sku = st.selectbox("SKU", _all_skus, key="sites_sku_filter")
+            _sku_col  = "SKU" if "SKU" in compliance.columns else compliance.columns[2]
+            _all_skus = sorted(compliance[_sku_col].dropna().astype(str).unique().tolist())
+            _sel_skus = st.multiselect("SKU", _all_skus,
+                                       placeholder="All SKUs",
+                                       key="sites_sku_filter")
 
         _disp2 = compliance.copy()
-        if _sel_site   != "All": _disp2 = _disp2[_disp2["Site_Key"] == _sel_site]
+        if _sel_site  != "All": _disp2 = _disp2[_disp2["Site_Key"] == _sel_site]
         if _sel_status != "All": _disp2 = _disp2[_disp2["Status"]   == _sel_status]
-        if _sel_sku    != "All": _disp2 = _disp2[_disp2[_sku_col]   == _sel_sku]
+        if _sel_skus:            _disp2 = _disp2[_disp2[_sku_col].isin(_sel_skus)]
 
         def _status_bg(val):
             _c = {"Surplus": "#E5F5E0", "Deficit": "#FFE8E8", "Exact": "#E8F0FF"}
@@ -387,12 +399,15 @@ with tab2:
                          if c in _disp2.columns and HAS_PORTIONS]
         _show_cols = _base_cols + _portion_cols
 
-        st.dataframe(
-            (_disp2[_show_cols].style.map(_status_bg, subset=["Status"])
-             if "Status" in _disp2.columns else _disp2[_show_cols].style),
-            use_container_width=True,
-            height=520,
-        )
+        _num_cols = [c for c in
+                     ["Required_Qty","Ordered_Qty","Gap",
+                      "Portion_Required","Portion_Ordered","Portion_Gap"]
+                     if c in _disp2.columns]
+        _detail_fmt = {c: "{:.1f}" for c in _num_cols}
+        _detail_styled = _disp2[_show_cols].style.format(_detail_fmt)
+        if "Status" in _disp2.columns:
+            _detail_styled = _detail_styled.map(_status_bg, subset=["Status"])
+        st.dataframe(_detail_styled, use_container_width=True, height=520)
         st.caption(f"{len(_disp2):,} rows shown")
 
         st.download_button(
@@ -403,16 +418,17 @@ with tab2:
             key="sites_download",
         )
 
-        # ── When a specific SKU is selected, show ingredient + bidfood detail ──
-        if _sel_sku != "All":
+        # ── When exactly one SKU is selected, show ingredient + bidfood detail ──
+        if len(_sel_skus) == 1:
+            _sel_sku_single = _sel_skus[0]
             st.divider()
-            st.markdown(f"#### SKU {_sel_sku} — Detailed Breakdown")
+            st.markdown(f"#### SKU {_sel_sku_single} — Detailed Breakdown")
             _ing_sku, _bid_sku = st.columns(2)
 
             with _ing_sku:
                 st.markdown("**Ingredient Requirements (System B)**")
                 if not ingredient_s.empty and "SKU" in ingredient_s.columns:
-                    _ing_f = ingredient_s[ingredient_s["SKU"].astype(str) == _sel_sku]
+                    _ing_f = ingredient_s[ingredient_s["SKU"].astype(str) == _sel_sku_single]
                     if not _ing_f.empty:
                         if "Total_Raw_Qty" in _ing_f.columns:
                             _ing_f = _ing_f.sort_values("Total_Raw_Qty", ascending=False)
@@ -426,7 +442,7 @@ with tab2:
             with _bid_sku:
                 st.markdown("**Bidfood Stock Ordered (System A)**")
                 if not bidfood_s.empty and "Product Code" in bidfood_s.columns:
-                    _bid_f = bidfood_s[bidfood_s["Product Code"].astype(str) == _sel_sku]
+                    _bid_f = bidfood_s[bidfood_s["Product Code"].astype(str) == _sel_sku_single]
                     if not _bid_f.empty:
                         if "Total_Ordered_Qty" in _bid_f.columns:
                             _bid_f = _bid_f.copy()
