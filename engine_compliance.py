@@ -8,15 +8,22 @@ import re, difflib
 import pandas as pd
 
 
-def run(site_raw: pd.DataFrame, site_stock: pd.DataFrame) -> pd.DataFrame:
+def run(
+    site_raw: pd.DataFrame,
+    site_stock: pd.DataFrame,
+    store_site_map: dict | None = None,
+) -> pd.DataFrame:
     """
     Merge ingredient requirements (B) vs Bidfood stock (A) and compute gap.
 
     Parameters
     ----------
-    site_raw   : from engine_ingredient.run() — columns include Store, SKU, Total_Raw_Qty, UOM
-    site_stock : from engine_bidfood.run()    — columns include Site_Key, Product Code,
-                 Total_Ordered_Qty, Pack_UOM, Store_Name
+    site_raw       : from engine_ingredient.run() — columns include Store, SKU, Total_Raw_Qty, UOM
+    site_stock     : from engine_bidfood.run()    — columns include Site_Key, Product Code,
+                     Total_Ordered_Qty, Pack_UOM, Store_Name
+    store_site_map : optional dict {Store_Name → Site_Key} from mapping sheet.
+                     Used to resolve Site_Key for req-only rows that have no Bidfood
+                     match and therefore no Site_Key from the Bidfood side.
 
     Returns
     -------
@@ -92,6 +99,19 @@ def run(site_raw: pd.DataFrame, site_stock: pd.DataFrame) -> pd.DataFrame:
     compliance["Status"] = compliance["Gap"].apply(
         lambda g: "Surplus" if g > 0 else ("Deficit" if g < 0 else "Exact")
     )
+
+    # Final Site_Key resolution for req-only rows (no Bidfood match at all).
+    # After propagation, any row where Site_Key still equals Store_Name is a
+    # store that exists in the Items-wise data but never ordered through an LKN
+    # Bidfood account. Use the mapping sheet lookup (if provided) to set the
+    # correct location key instead of leaving the full store name.
+    if store_site_map:
+        _is_fallback = compliance["Site_Key"] == compliance["Store_Name"]
+        compliance.loc[_is_fallback, "Site_Key"] = (
+            compliance.loc[_is_fallback, "Store_Name"]
+            .map(store_site_map)
+            .fillna(compliance.loc[_is_fallback, "Store_Name"])
+        )
 
     # Friendly column names for dashboard
     compliance = compliance.rename(columns={"Product_Code":"SKU"})

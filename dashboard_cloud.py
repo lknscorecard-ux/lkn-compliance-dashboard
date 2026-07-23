@@ -3,15 +3,12 @@ dashboard_cloud.py  —  LKN Compliance Dashboard (Cloud Version)
 ================================================================
 Permanently hosted on Streamlit Community Cloud.
 Reads live from Google Sheets — no file uploads, no local Python needed.
-Auto-refreshes every 5 minutes.
 
 Deploy: connect your GitHub repo to https://share.streamlit.io
-Set secrets: GOOGLE_CREDENTIALS_JSON and RESULTS_SHEET_ID
-
-Anyone with the URL can view the dashboard.
+Secrets required: gcp_service_account (JSON object) + RESULTS_SHEET_ID
 """
 
-import os, json, warnings
+import os, warnings
 warnings.filterwarnings("ignore")
 
 import streamlit as st
@@ -19,10 +16,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build as gcp_build
 import gspread
 
-# ── Config ─────────────────────────────────────────────────────────────────────
+# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="LKN Compliance Dashboard",
     page_icon="🍗",
@@ -30,25 +26,27 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+st.markdown("""
+<style>
+  [data-testid="stMetricValue"] { font-size: 2rem; font-weight: 700; }
+  [data-testid="stMetricLabel"] { font-size: 0.8rem; color: #555; }
+  .stDataFrame { border-radius: 8px; }
+  div[data-testid="stHorizontalBlock"] > div { gap: 0.5rem; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Constants ──────────────────────────────────────────────────────────────────
 RESULTS_SHEET_ID = os.environ.get("RESULTS_SHEET_ID", "")
-PROJECT_ID  = "compliance-501910"
-REGION      = "europe-west2"
-JOB_NAME    = "lkn-pipeline"
+PROJECT_ID = "compliance-501910"
+REGION     = "europe-west2"
+JOB_NAME   = "lkn-pipeline"
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/cloud-platform",
 ]
 
-st.markdown("""
-<style>
-  [data-testid="stMetricValue"] { font-size: 2.2rem; font-weight: 700; }
-  [data-testid="stMetricLabel"] { font-size: 0.85rem; color: #666; }
-  .stDataFrame { border-radius: 8px; }
-</style>
-""", unsafe_allow_html=True)
-
-# ── Auth ────────────────────────────────────────────────────────────────────────
+# ── Auth ───────────────────────────────────────────────────────────────────────
 @st.cache_resource(ttl=3600)
 def _get_creds():
     info = dict(st.secrets["gcp_service_account"])
@@ -58,84 +56,97 @@ def _get_gc():
     return gspread.authorize(_get_creds())
 
 def _trigger_pipeline():
-    import google.auth.transport.requests, requests as _requests
+    import google.auth.transport.requests, requests as _req
     creds = _get_creds()
     creds.refresh(google.auth.transport.requests.Request())
-    url = f"https://{REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/{PROJECT_ID}/jobs/{JOB_NAME}:run"
-    resp = _requests.post(url, headers={"Authorization": f"Bearer {creds.token}"})
+    url  = (f"https://{REGION}-run.googleapis.com/apis/run.googleapis.com/v1"
+            f"/namespaces/{PROJECT_ID}/jobs/{JOB_NAME}:run")
+    resp = _req.post(url, headers={"Authorization": f"Bearer {creds.token}"})
     if not resp.ok:
-        raise Exception(resp.text)
+        raise RuntimeError(resp.text)
 
-
-
+# ── Data loading ───────────────────────────────────────────────────────────────
 @st.cache_data(ttl=600, show_spinner=False)
 def _load_all_sheets() -> dict:
     import time
-    sid = (
-        st.secrets.get("RESULTS_SHEET_ID")
-        or os.environ.get("RESULTS_SHEET_ID", RESULTS_SHEET_ID)
-    )
-    gc = _get_gc()
-    sh = gc.open_by_key(sid)
-    result = {}
-    for tab in ["Compliance Gap","Site Summary","Ingredient Requirements",
-                "Bidfood Stock","Recipe Summary","Unmatched","Run Log"]:
+    sid = (st.secrets.get("RESULTS_SHEET_ID")
+           or os.environ.get("RESULTS_SHEET_ID", RESULTS_SHEET_ID))
+    gc  = _get_gc()
+    sh  = gc.open_by_key(sid)
+    out = {}
+    for tab in ["Compliance Gap", "Site Summary",
+                "Ingredient Requirements", "Bidfood Stock", "Run Log"]:
         try:
-            ws = sh.worksheet(tab)
-            records = ws.get_all_records()
-            result[tab] = pd.DataFrame(records) if records else pd.DataFrame()
-        except Exception as e:
-            result[tab] = pd.DataFrame()
-        time.sleep(1)   # avoid hitting Sheets API rate limit
-    return result
+            recs       = sh.worksheet(tab).get_all_records()
+            out[tab]   = pd.DataFrame(recs) if recs else pd.DataFrame()
+        except Exception:
+            out[tab]   = pd.DataFrame()
+        time.sleep(1)   # respect Sheets API 60 reads/min quota
+    return out
 
+def _safe(tab: str) -> pd.DataFrame:
+    return _load_all_sheets().get(tab, pd.DataFrame())
 
-def _load_safe(tab):
-    data = _load_all_sheets()
-    return data.get(tab, pd.DataFrame())
+def _to_csv(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8")
 
-# ── Header ──────────────────────────────────────────────────────────────────────
-col_h1, col_h2, col_h3 = st.columns([3, 1, 1])
-with col_h1:
+# ── Header ─────────────────────────────────────────────────────────────────────
+h1, h2, h3 = st.columns([3, 1, 1])
+with h1:
     st.title("🍗 LKN Compliance Dashboard")
-with col_h2:
+with h2:
     if st.button("▶ Run Pipeline Now", type="primary", use_container_width=True):
         with st.spinner("Triggering pipeline …"):
             try:
                 _trigger_pipeline()
-                st.success("Pipeline started! Results update in ~2 min.")
+                st.success("Pipeline started — results update in ~2 min.")
             except Exception as e:
                 st.error(f"Failed: {e}")
-with col_h3:
+with h3:
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-# ── Load all sheets ─────────────────────────────────────────────────────────────
-compliance    = _load_safe("Compliance Gap")
-site_summ     = _load_safe("Site Summary")
-ingredient_s  = _load_safe("Ingredient Requirements")
-bidfood_s     = _load_safe("Bidfood Stock")
-recipe_s      = _load_safe("Recipe Summary")
-unmatched_s   = _load_safe("Unmatched")
-run_log       = _load_safe("Run Log")
+# ── Load all data ──────────────────────────────────────────────────────────────
+with st.spinner("Loading data from Google Sheets …"):
+    compliance   = _safe("Compliance Gap")
+    site_summ    = _safe("Site Summary")
+    ingredient_s = _safe("Ingredient Requirements")
+    bidfood_s    = _safe("Bidfood Stock")
+    run_log      = _safe("Run Log")
 
 if compliance.empty:
-    st.info("No compliance data yet. The pipeline runs every Monday — or trigger it manually from Google Cloud Console.")
+    st.info("No compliance data yet. Trigger the pipeline above.")
     st.stop()
 
-# Numeric coercion
-for col in ["Required_Qty","Ordered_Qty","Gap"]:
-    if col in compliance.columns:
-        compliance[col] = pd.to_numeric(compliance[col], errors="coerce").fillna(0)
-for col in ["Compliance_%","Total_SKUs","Surplus","Deficit","Exact"]:
-    if col in site_summ.columns:
-        site_summ[col] = pd.to_numeric(site_summ[col], errors="coerce").fillna(0)
-for col in ["Total_Raw_Qty","Total_Cost"]:
-    if col in ingredient_s.columns:
-        ingredient_s[col] = pd.to_numeric(ingredient_s[col], errors="coerce").fillna(0)
+# ── Numeric coercion ───────────────────────────────────────────────────────────
+_num_compliance = ["Required_Qty", "Ordered_Qty", "Gap",
+                   "Portion_Required", "Portion_Ordered", "Portion_Gap"]
+for c in _num_compliance:
+    if c in compliance.columns:
+        compliance[c] = pd.to_numeric(compliance[c], errors="coerce").fillna(0)
 
-# ── Last run info ────────────────────────────────────────────────────────────────
+_num_site = ["Compliance_%", "Total_SKUs", "Surplus", "Deficit", "Exact"]
+for c in _num_site:
+    if c in site_summ.columns:
+        site_summ[c] = pd.to_numeric(site_summ[c], errors="coerce").fillna(0)
+
+for c in ["Total_Raw_Qty", "Total_Cost"]:
+    if c in ingredient_s.columns:
+        ingredient_s[c] = pd.to_numeric(ingredient_s[c], errors="coerce").fillna(0)
+
+# ── Derived flags ──────────────────────────────────────────────────────────────
+HAS_PORTIONS = ("Portion_Gap" in compliance.columns
+                and pd.to_numeric(compliance["Portion_Gap"], errors="coerce").abs().sum() > 0)
+
+# ── Site ranking ───────────────────────────────────────────────────────────────
+if not site_summ.empty and "Compliance_%" in site_summ.columns:
+    site_summ = (site_summ
+                 .sort_values("Compliance_%", ascending=False)
+                 .reset_index(drop=True))
+    site_summ.insert(0, "Rank", range(1, len(site_summ) + 1))
+
+# ── Last run banner ────────────────────────────────────────────────────────────
 if not run_log.empty:
     last = run_log.iloc[-1]
     st.markdown(
@@ -143,150 +154,292 @@ if not run_log.empty:
         f"**Bidfood:** {last.get('Bidfood File','–')}  &nbsp;|&nbsp;  "
         f"**Items:** {last.get('Items File','–')}"
     )
+
+# Week commencing selector (shown when multiple weeks available)
+_wc_col_exists = "Week_Commencing" in compliance.columns
+_all_weeks = []
+if _wc_col_exists:
+    _all_weeks = sorted(compliance["Week_Commencing"].dropna().unique().tolist(), reverse=True)
+
+if _wc_col_exists and len(_all_weeks) > 1:
+    sel_week = st.selectbox(
+        "Week commencing", _all_weeks,
+        help="Filter all views to a specific week. Run the pipeline weekly to build history."
+    )
+    compliance   = compliance[compliance["Week_Commencing"] == sel_week]
+    if "Week_Commencing" in site_summ.columns:
+        site_summ = site_summ[site_summ["Week_Commencing"] == sel_week]
+elif _wc_col_exists and len(_all_weeks) == 1:
+    st.caption(f"Week commencing: **{_all_weeks[0]}**")
+
 st.divider()
 
-# ── KPI Row ──────────────────────────────────────────────────────────────────────
-total_sites    = site_summ.shape[0] if not site_summ.empty else "–"
-avg_compliance = round(site_summ["Compliance_%"].mean(), 1) if not site_summ.empty else 0
-deficit_sites  = int((site_summ["Deficit"] > 0).sum()) if not site_summ.empty else 0
-total_cost     = ingredient_s["Total_Cost"].sum() if "Total_Cost" in ingredient_s.columns else 0
-total_ordered  = bidfood_s["Total_Spend_GBP"].apply(pd.to_numeric, errors="coerce").sum() if not bidfood_s.empty else 0
+# ── KPI Row ────────────────────────────────────────────────────────────────────
+_total_sites     = site_summ.shape[0] if not site_summ.empty else 0
+_compliant_sites = int((site_summ["Deficit"] == 0).sum()) if not site_summ.empty else 0
+_noncomp_sites   = _total_sites - _compliant_sites
+_avg_comp        = round(site_summ["Compliance_%"].mean(), 1) if not site_summ.empty else 0
+_bidfood_spend   = (bidfood_s["Total_Spend_GBP"]
+                    .apply(pd.to_numeric, errors="coerce").sum()
+                    if not bidfood_s.empty else 0)
 
 k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Sites Monitored",    total_sites)
-k2.metric("Avg Compliance",     f"{avg_compliance:.1f}%")
-k3.metric("Sites with Deficit", deficit_sites,
-          delta=f"{deficit_sites} need attention" if deficit_sites else "All compliant",
-          delta_color="inverse" if deficit_sites else "off")
-k4.metric("Ingredient Cost",    f"£{total_cost:,.0f}")
-k5.metric("Bidfood Spend",      f"£{total_ordered:,.0f}")
+k1.metric("Sites Monitored",   _total_sites)
+k2.metric("Avg Compliance",    f"{_avg_comp:.1f}%")
+k3.metric("Compliant Sites",   _compliant_sites,
+          delta=f"{_compliant_sites} of {_total_sites}", delta_color="normal")
+k4.metric("Non-Compliant",     _noncomp_sites,
+          delta=f"{_noncomp_sites} need attention" if _noncomp_sites else "All clear",
+          delta_color="inverse" if _noncomp_sites else "off")
+k5.metric("Bidfood Spend",     f"£{_bidfood_spend:,.0f}")
 
 st.divider()
 
-# ── Main tabs ────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["📊 Overview", "🏪 Sites", "📦 SKUs", "🍽 Recipe", "📋 Run Log"]
-)
+# ── Tabs (Recipe + Run Log removed) ───────────────────────────────────────────
+tab1, tab2 = st.tabs(["📊 Overview", "🏪 Sites"])
 
-# ── TAB 1: Overview ──────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — Overview
+# ══════════════════════════════════════════════════════════════════════════════
 with tab1:
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        st.subheader("Compliance Split")
-        n_sur = int((site_summ["Surplus"] > 0).sum()) if not site_summ.empty else 0
-        n_def = int((site_summ["Deficit"] > 0).sum()) if not site_summ.empty else 0
-        n_ex  = int(((site_summ["Deficit"] == 0) & (site_summ["Surplus"] > 0)).sum()) if not site_summ.empty else 0
-        fig = go.Figure(go.Pie(
-            labels=["Surplus","Deficit","Exact"],
-            values=[n_sur, n_def, n_ex],
-            marker_colors=["#538135","#C00000","#2E75B6"],
-            hole=0.55, textinfo="label+percent",
-        ))
-        fig.update_layout(height=260, margin=dict(t=0,b=0,l=0,r=0), showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
 
-    with c2:
-        st.subheader("Top 10 Deficit SKUs (all sites)")
+    # ── Row 1: Donut + Top 10 Deficit SKUs ────────────────────────────────────
+    c_donut, c_deficit = st.columns([1, 2])
+
+    with c_donut:
+        st.subheader("Site Compliance")
+        if not site_summ.empty:
+            n_comp    = int((site_summ["Deficit"] == 0).sum())
+            n_noncomp = int((site_summ["Deficit"] > 0).sum())
+            _fig_donut = go.Figure(go.Pie(
+                labels=["Compliant", "Non-Compliant"],
+                values=[n_comp, n_noncomp],
+                marker_colors=["#538135", "#C00000"],
+                hole=0.60,
+                textinfo="label+percent",
+                hovertemplate="%{label}: %{value} sites<extra></extra>",
+            ))
+            _fig_donut.update_layout(
+                height=300,
+                margin=dict(t=10, b=0, l=0, r=0),
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
+                annotations=[dict(
+                    text=f"<b>{_total_sites}</b><br>Sites",
+                    x=0.5, y=0.5, font_size=14, showarrow=False
+                )],
+            )
+            st.plotly_chart(_fig_donut, use_container_width=True)
+        else:
+            st.info("No site data available.")
+
+    with c_deficit:
+        _gap_col   = "Portion_Gap"   if HAS_PORTIONS else "Gap"
+        _gap_label = "Portion Gap"   if HAS_PORTIONS else "Total Gap (units/g)"
+        st.subheader(f"Top 10 Deficit SKUs  ({'portions' if HAS_PORTIONS else 'units'})")
+
         if not compliance.empty and "Status" in compliance.columns:
-            def_df = (
+            _def_grp = (
                 compliance[compliance["Status"] == "Deficit"]
-                .groupby(["SKU","Ingredient"])
-                .agg(Total_Gap=("Gap","sum"))
+                .groupby(["SKU", "Ingredient"])
+                .agg(Total_Gap=(_gap_col, "sum"))
                 .reset_index()
                 .sort_values("Total_Gap")
                 .head(10)
             )
-            if not def_df.empty:
-                fig2 = px.bar(def_df, x="Total_Gap", y="Ingredient", orientation="h",
-                              color_discrete_sequence=["#C00000"])
-                fig2.update_layout(height=260, margin=dict(t=0,b=0,l=0,r=10))
-                st.plotly_chart(fig2, use_container_width=True)
+            if not _def_grp.empty:
+                _fig_def = px.bar(
+                    _def_grp, x="Total_Gap", y="Ingredient",
+                    orientation="h",
+                    color_discrete_sequence=["#C00000"],
+                    labels={"Total_Gap": _gap_label, "Ingredient": ""},
+                    text=_def_grp["Total_Gap"].apply(lambda v: f"{v:,.1f}"),
+                )
+                _fig_def.update_traces(textposition="outside")
+                _fig_def.update_layout(
+                    height=300,
+                    margin=dict(t=0, b=0, l=0, r=80),
+                )
+                st.plotly_chart(_fig_def, use_container_width=True)
             else:
                 st.success("No deficits this week!")
+        else:
+            st.info("No compliance data.")
 
-    st.subheader("Site Compliance Summary")
+    st.divider()
+
+    # ── Row 2: Top 10 / Bottom 10 sites ───────────────────────────────────────
+    if not site_summ.empty and "Compliance_%" in site_summ.columns:
+        c_top, c_bot = st.columns(2)
+
+        with c_top:
+            st.subheader("🏆 Top 10 Compliant Sites")
+            _top10 = site_summ.nlargest(10, "Compliance_%").copy()
+            _top10["label"] = _top10["Compliance_%"].apply(lambda x: f"{x:.1f}%")
+            _fig_top = px.bar(
+                _top10, x="Compliance_%", y="Site_Key",
+                orientation="h",
+                color="Compliance_%",
+                color_continuous_scale=[[0, "#92D050"], [1, "#375623"]],
+                text="label",
+                labels={"Compliance_%": "Compliance %", "Site_Key": ""},
+            )
+            _fig_top.update_traces(textposition="outside")
+            _fig_top.update_layout(
+                height=360,
+                margin=dict(t=0, b=0, l=0, r=70),
+                coloraxis_showscale=False,
+                xaxis=dict(range=[0, 110]),
+            )
+            st.plotly_chart(_fig_top, use_container_width=True)
+
+        with c_bot:
+            st.subheader("⚠️ Bottom 10 Sites")
+            _bot10 = site_summ.nsmallest(10, "Compliance_%").copy()
+            _bot10["label"] = _bot10["Compliance_%"].apply(lambda x: f"{x:.1f}%")
+            _fig_bot = px.bar(
+                _bot10, x="Compliance_%", y="Site_Key",
+                orientation="h",
+                color="Compliance_%",
+                color_continuous_scale=[[0, "#7B0000"], [1, "#FF6B6B"]],
+                text="label",
+                labels={"Compliance_%": "Compliance %", "Site_Key": ""},
+            )
+            _fig_bot.update_traces(textposition="outside")
+            _fig_bot.update_layout(
+                height=360,
+                margin=dict(t=0, b=0, l=0, r=70),
+                coloraxis_showscale=False,
+                xaxis=dict(range=[0, 110]),
+            )
+            st.plotly_chart(_fig_bot, use_container_width=True)
+
+    st.divider()
+
+    # ── Full site ranking table + download ─────────────────────────────────────
+    st.subheader("All Sites — Compliance Ranking")
     if not site_summ.empty:
         def _pct_color(val):
             try:
-                pct = float(str(val).replace("%",""))
+                pct = float(str(val).replace("%", ""))
                 if pct >= 80:   return "color: #266F00; font-weight:700"
                 elif pct >= 50: return "color: #B8860B; font-weight:700"
                 else:           return "color: #C00000; font-weight:700"
-            except:
+            except Exception:
                 return ""
-        disp = site_summ.copy()
-        if "Compliance_%" in disp.columns:
-            disp["Compliance_%"] = disp["Compliance_%"].map(lambda x: f"{float(x):.1f}%")
-        styled = disp.style.map(_pct_color, subset=["Compliance_%"]) if "Compliance_%" in disp.columns else disp.style
-        st.dataframe(styled, use_container_width=True, height=340)
 
-# ── TAB 2: Sites ─────────────────────────────────────────────────────────────────
+        _disp = site_summ.copy()
+        if "Compliance_%" in _disp.columns:
+            _disp["Compliance_%"] = _disp["Compliance_%"].map(lambda x: f"{float(x):.1f}%")
+
+        _styled = (
+            _disp.style.map(_pct_color, subset=["Compliance_%"])
+            if "Compliance_%" in _disp.columns else _disp.style
+        )
+        st.dataframe(_styled, use_container_width=True, height=400)
+
+        # Download — original numeric df with Rank
+        st.download_button(
+            "⬇️ Download Full Site Ranking (CSV)",
+            data=_to_csv(site_summ),
+            file_name="lkn_site_compliance_ranking.csv",
+            mime="text/csv",
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — Sites detail
+# ══════════════════════════════════════════════════════════════════════════════
 with tab2:
     st.subheader("Site-level Compliance Detail")
-    if not compliance.empty:
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            sites = ["All"] + sorted(compliance["Site_Key"].dropna().astype(str).unique().tolist())
-            sel   = st.selectbox("Site", sites)
-        with f2:
-            sel_st = st.selectbox("Status", ["All","Surplus","Deficit","Exact"])
-        with f3:
-            sku_col = "SKU" if "SKU" in compliance.columns else compliance.columns[2]
-            skus   = ["All"] + sorted(compliance[sku_col].dropna().astype(str).unique().tolist())
-            sel_sk = st.selectbox("SKU", skus)
 
-        disp = compliance.copy()
-        if sel    != "All": disp = disp[disp["Site_Key"] == sel]
-        if sel_st != "All": disp = disp[disp["Status"]   == sel_st]
-        if sel_sk != "All": disp = disp[disp["SKU"]      == sel_sk]
+    if not compliance.empty:
+        _f1, _f2, _f3 = st.columns(3)
+        with _f1:
+            _sites = (["All"]
+                      + sorted(compliance["Site_Key"].dropna().astype(str).unique().tolist()))
+            _sel_site = st.selectbox("Site", _sites, key="sites_site_filter")
+        with _f2:
+            _sel_status = st.selectbox("Status", ["All", "Surplus", "Deficit", "Exact"],
+                                       key="sites_status_filter")
+        with _f3:
+            _sku_col = "SKU" if "SKU" in compliance.columns else compliance.columns[2]
+            _all_skus = (["All"]
+                         + sorted(compliance[_sku_col].dropna().astype(str).unique().tolist()))
+            _sel_sku = st.selectbox("SKU", _all_skus, key="sites_sku_filter")
+
+        _disp2 = compliance.copy()
+        if _sel_site   != "All": _disp2 = _disp2[_disp2["Site_Key"] == _sel_site]
+        if _sel_status != "All": _disp2 = _disp2[_disp2["Status"]   == _sel_status]
+        if _sel_sku    != "All": _disp2 = _disp2[_disp2[_sku_col]   == _sel_sku]
 
         def _status_bg(val):
-            c = {"Surplus":"#E5F5E0","Deficit":"#FFE8E8","Exact":"#E8F0FF"}
-            return f"background-color: {c.get(val,'')}"
+            _c = {"Surplus": "#E5F5E0", "Deficit": "#FFE8E8", "Exact": "#E8F0FF"}
+            return f"background-color: {_c.get(val, '')}"
+
+        # Choose which columns to show: prefer portion columns if available
+        _base_cols = [c for c in
+                      ["Week_Commencing", "Site_Key", "Store_Name", "SKU", "Ingredient",
+                       "Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap", "Status"]
+                      if c in _disp2.columns]
+        _portion_cols = [c for c in
+                         ["Portion_Required", "Portion_Ordered", "Portion_Gap"]
+                         if c in _disp2.columns and HAS_PORTIONS]
+        _show_cols = _base_cols + _portion_cols
 
         st.dataframe(
-            disp.style.map(_status_bg, subset=["Status"]) if "Status" in disp.columns else disp.style,
-            use_container_width=True, height=500
+            (_disp2[_show_cols].style.map(_status_bg, subset=["Status"])
+             if "Status" in _disp2.columns else _disp2[_show_cols].style),
+            use_container_width=True,
+            height=520,
         )
-        st.caption(f"{len(disp):,} rows")
+        st.caption(f"{len(_disp2):,} rows shown")
 
-# ── TAB 3: SKUs ──────────────────────────────────────────────────────────────────
-with tab3:
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Ingredient Requirements (System B)")
-        if not ingredient_s.empty:
-            top = ingredient_s.copy()
-            if "Total_Raw_Qty" in top.columns:
-                top = top.sort_values("Total_Raw_Qty", ascending=False)
-            st.dataframe(top.head(30), use_container_width=True, height=380)
-    with c2:
-        st.subheader("Bidfood Stock Ordered (System A)")
-        if not bidfood_s.empty:
-            top2 = bidfood_s.copy()
-            if "Total_Ordered_Qty" in top2.columns:
-                top2["Total_Ordered_Qty"] = pd.to_numeric(top2["Total_Ordered_Qty"], errors="coerce")
-                top2 = top2.sort_values("Total_Ordered_Qty", ascending=False)
-            st.dataframe(top2.head(30), use_container_width=True, height=380)
+        st.download_button(
+            "⬇️ Download Filtered Results (CSV)",
+            data=_to_csv(_disp2[_show_cols]),
+            file_name="lkn_compliance_detail.csv",
+            mime="text/csv",
+            key="sites_download",
+        )
 
-# ── TAB 4: Recipe ────────────────────────────────────────────────────────────────
-with tab4:
-    st.subheader("Recipe Matching Summary")
-    if not recipe_s.empty:
-        st.dataframe(recipe_s, use_container_width=True, height=350)
-    if not unmatched_s.empty:
-        with st.expander(f"⚠️ Unmatched / No-recipe items ({len(unmatched_s):,} rows)"):
-            st.dataframe(unmatched_s, use_container_width=True, height=250)
+        # ── When a specific SKU is selected, show ingredient + bidfood detail ──
+        if _sel_sku != "All":
+            st.divider()
+            st.markdown(f"#### SKU {_sel_sku} — Detailed Breakdown")
+            _ing_sku, _bid_sku = st.columns(2)
 
-# ── TAB 5: Run Log ────────────────────────────────────────────────────────────────
-with tab5:
-    st.subheader("Pipeline Run History")
-    if not run_log.empty:
-        st.dataframe(run_log.sort_index(ascending=False), use_container_width=True, height=400)
-    else:
-        st.info("No run history yet.")
-    st.markdown("---")
-    st.markdown(
-        "**Pipeline runs every Monday at 8am** via Google Cloud Scheduler.  \n"
-        "To trigger manually: Google Cloud Console → Cloud Run → Jobs → **lkn-pipeline** → Run Job."
-    )
+            with _ing_sku:
+                st.markdown("**Ingredient Requirements (System B)**")
+                if not ingredient_s.empty and "SKU" in ingredient_s.columns:
+                    _ing_f = ingredient_s[ingredient_s["SKU"].astype(str) == _sel_sku]
+                    if not _ing_f.empty:
+                        if "Total_Raw_Qty" in _ing_f.columns:
+                            _ing_f = _ing_f.sort_values("Total_Raw_Qty", ascending=False)
+                        st.dataframe(_ing_f, use_container_width=True, height=280)
+                        st.caption(f"{len(_ing_f):,} rows")
+                    else:
+                        st.info("No ingredient rows for this SKU.")
+                else:
+                    st.info("No ingredient data loaded.")
+
+            with _bid_sku:
+                st.markdown("**Bidfood Stock Ordered (System A)**")
+                if not bidfood_s.empty and "Product Code" in bidfood_s.columns:
+                    _bid_f = bidfood_s[bidfood_s["Product Code"].astype(str) == _sel_sku]
+                    if not _bid_f.empty:
+                        if "Total_Ordered_Qty" in _bid_f.columns:
+                            _bid_f = _bid_f.copy()
+                            _bid_f["Total_Ordered_Qty"] = pd.to_numeric(
+                                _bid_f["Total_Ordered_Qty"], errors="coerce")
+                            _bid_f = _bid_f.sort_values("Total_Ordered_Qty", ascending=False)
+                        st.dataframe(_bid_f, use_container_width=True, height=280)
+                        st.caption(f"{len(_bid_f):,} rows")
+                    else:
+                        st.info("No Bidfood orders for this SKU.")
+                else:
+                    st.info("No Bidfood stock data loaded.")
+
+
+        else:
+            st.info("No Bidfood stock data.")
