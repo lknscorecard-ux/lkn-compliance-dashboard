@@ -238,9 +238,19 @@ with tab1:
         _unit_label = "portions" if HAS_PORTIONS else "units/g"
         st.subheader(f"Top 10 Deficit SKUs ({_unit_label})")
 
+        # Only include food ingredient SKUs (excludes packaging/stickers)
+        _FOOD_SKUS = {
+            "34188","30110","06583","15661","18363","25788","26214",
+            "17339","26364","23785","32808","12394","22667","22668",
+            "26222","26227","26229","29053","30003",
+        }
+
         if not compliance.empty and "Status" in compliance.columns:
             _def_grp = (
-                compliance[compliance["Status"] == "Deficit"]
+                compliance[
+                    (compliance["Status"] == "Deficit") &
+                    (compliance["SKU"].astype(str).isin(_FOOD_SKUS))
+                ]
                 .groupby(["SKU", "Ingredient"])
                 .agg(Total_Gap=(_gap_col, "sum"))
                 .reset_index()
@@ -279,47 +289,43 @@ with tab1:
 
         with c_top:
             st.subheader("🏆 Top 10 Compliant Sites")
-            # Sort ascending so highest % is LAST → rendered at TOP by Plotly
             _top10 = (site_summ.nlargest(10, "Compliance_%")
                       .sort_values("Compliance_%", ascending=True).copy())
             _top10["label"] = _top10["Compliance_%"].apply(lambda x: f"{x:.1f}%")
             _fig_top = px.bar(
-                _top10, x="Compliance_%", y="Site_Key",
+                _top10, x="Compliance_%", y="Store_Name",
                 orientation="h",
                 color="Compliance_%",
                 color_continuous_scale=[[0, "#92D050"], [1, "#375623"]],
                 text="label",
-                labels={"Compliance_%": "Compliance %", "Site_Key": ""},
+                labels={"Compliance_%": "Compliance %", "Store_Name": ""},
             )
             _fig_top.update_traces(textposition="outside")
             _fig_top.update_layout(
-                height=360,
+                height=380,
                 margin=dict(t=0, b=0, l=0, r=70),
                 coloraxis_showscale=False,
-                xaxis=dict(range=[0, 110]),
+                xaxis=dict(range=[0, 115], fixedrange=True),
             )
             st.plotly_chart(_fig_top, use_container_width=True)
 
         with c_bot:
             st.subheader("⚠️ Bottom 10 Sites")
-            # Sort descending so lowest % is LAST → rendered at TOP by Plotly
             _bot10 = (site_summ.nsmallest(10, "Compliance_%")
                       .sort_values("Compliance_%", ascending=False).copy())
             _bot10["label"] = _bot10["Compliance_%"].apply(lambda x: f"{x:.1f}%")
             _fig_bot = px.bar(
-                _bot10, x="Compliance_%", y="Site_Key",
+                _bot10, x="Compliance_%", y="Store_Name",
                 orientation="h",
-                color="Compliance_%",
-                color_continuous_scale=[[0, "#7B0000"], [1, "#FF6B6B"]],
+                color_discrete_sequence=["#C00000"],
                 text="label",
-                labels={"Compliance_%": "Compliance %", "Site_Key": ""},
+                labels={"Compliance_%": "Compliance %", "Store_Name": ""},
             )
             _fig_bot.update_traces(textposition="outside")
             _fig_bot.update_layout(
-                height=360,
+                height=380,
                 margin=dict(t=0, b=0, l=0, r=70),
-                coloraxis_showscale=False,
-                xaxis=dict(range=[0, 110]),
+                xaxis=dict(range=[0, 115], fixedrange=True),
             )
             st.plotly_chart(_fig_bot, use_container_width=True)
 
@@ -399,11 +405,10 @@ with tab2:
                          if c in _disp2.columns and HAS_PORTIONS]
         _show_cols = _base_cols + _portion_cols
 
-        _num_cols = [c for c in
-                     ["Required_Qty","Ordered_Qty","Gap",
-                      "Portion_Required","Portion_Ordered","Portion_Gap"]
-                     if c in _disp2.columns]
-        _detail_fmt = {c: "{:.1f}" for c in _num_cols}
+        _num_cols_1dp = [c for c in ["Required_Qty","Ordered_Qty","Gap"] if c in _disp2.columns]
+        _num_cols_0dp = [c for c in ["Portion_Required","Portion_Ordered","Portion_Gap"] if c in _disp2.columns]
+        _detail_fmt = {c: "{:.1f}" for c in _num_cols_1dp}
+        _detail_fmt.update({c: "{:.0f}" for c in _num_cols_0dp})
         _detail_styled = _disp2[_show_cols].style.format(_detail_fmt)
         if "Status" in _disp2.columns:
             _detail_styled = _detail_styled.map(_status_bg, subset=["Status"])
