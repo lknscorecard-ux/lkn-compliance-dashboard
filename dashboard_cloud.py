@@ -283,6 +283,7 @@ with tab1:
                 _nc5 = (_nc_grp.nlargest(5, "Deficit")
                         .sort_values("Deficit", ascending=True))
                 if not _nc5.empty:
+                    _nc_max = _nc5["Deficit"].max() if not _nc5.empty else 100
                     _fig_nc = px.bar(
                         _nc5, x="Deficit", y="Display_Name", orientation="h",
                         color_discrete_sequence=["#C00000"],
@@ -290,7 +291,10 @@ with tab1:
                         labels={"Deficit": f"Deficit ({_unit_label})", "Display_Name": ""},
                     )
                     _fig_nc.update_traces(textposition="outside")
-                    _fig_nc.update_layout(height=250, margin=dict(t=10, b=0, l=0, r=70))
+                    _fig_nc.update_layout(
+                        height=250, margin=dict(t=10, b=0, l=0, r=20),
+                        xaxis=dict(range=[0, _nc_max * 1.35], fixedrange=True),
+                    )
                     st.plotly_chart(_fig_nc, use_container_width=True)
                 else:
                     st.success("No deficits!")
@@ -323,8 +327,8 @@ with tab1:
                     )
                     _fig_comp.update_traces(textposition="outside")
                     _fig_comp.update_layout(
-                        height=250, margin=dict(t=10, b=0, l=0, r=70),
-                        xaxis=dict(range=[0, 115], fixedrange=True),
+                        height=250, margin=dict(t=10, b=0, l=0, r=20),
+                        xaxis=dict(range=[0, 135], fixedrange=True),
                     )
                     st.plotly_chart(_fig_comp, use_container_width=True)
                 else:
@@ -444,22 +448,40 @@ with tab2:
             _c = {"Surplus": "#E5F5E0", "Deficit": "#FFE8E8", "Exact": "#E8F0FF"}
             return f"background-color: {_c.get(val, '')}"
 
-        # Choose which columns to show: prefer portion columns if available
-        _base_cols = [c for c in
-                      ["Week_Commencing", "Site_Key", "Store_Name", "SKU", "Ingredient",
-                       "Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap", "Status"]
-                      if c in _disp2.columns]
-        _portion_cols = [c for c in
-                         ["Portion_Required", "Portion_Ordered", "Portion_Gap"]
-                         if c in _disp2.columns and HAS_PORTIONS]
-        _show_cols = _base_cols + _portion_cols
+        # ── Column visibility (session-persistent) ────────────────────────────
+        # Default: hide raw qty/UOM columns; Status always last
+        _all_possible = [c for c in
+                         ["Week_Commencing", "Site_Key", "Store_Name", "SKU", "Ingredient",
+                          "Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap",
+                          "Portion_Required", "Portion_Ordered", "Portion_Gap", "Status"]
+                         if c in _disp2.columns]
+        _hidden_by_default = {"Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap"}
 
-        _num_cols_1dp = [c for c in ["Required_Qty","Ordered_Qty","Gap"] if c in _disp2.columns]
-        _num_cols_0dp = [c for c in ["Portion_Required","Portion_Ordered","Portion_Gap"] if c in _disp2.columns]
+        # Initialise session state once (persists until page refresh / tab close)
+        if "sites_visible_cols" not in st.session_state:
+            st.session_state["sites_visible_cols"] = [
+                c for c in _all_possible if c not in _hidden_by_default
+            ]
+
+        with st.expander("⚙️ Show / Hide Columns"):
+            _toggled = st.multiselect(
+                "Visible columns (changes apply to everyone — remove to hide, add to show)",
+                options=_all_possible,
+                default=st.session_state["sites_visible_cols"],
+                key="sites_visible_cols",
+            )
+
+        # Enforce Status last if it's in the selection
+        _show_cols = [c for c in _toggled if c != "Status"]
+        if "Status" in _toggled:
+            _show_cols.append("Status")
+
+        _num_cols_1dp = [c for c in ["Required_Qty","Ordered_Qty","Gap"] if c in _show_cols]
+        _num_cols_0dp = [c for c in ["Portion_Required","Portion_Ordered","Portion_Gap"] if c in _show_cols]
         _detail_fmt = {c: "{:.1f}" for c in _num_cols_1dp}
         _detail_fmt.update({c: "{:.0f}" for c in _num_cols_0dp})
         _detail_styled = _disp2[_show_cols].style.format(_detail_fmt)
-        if "Status" in _disp2.columns:
+        if "Status" in _show_cols:
             _detail_styled = _detail_styled.map(_status_bg, subset=["Status"])
         st.dataframe(_detail_styled, use_container_width=True, height=520)
         st.caption(f"{len(_disp2):,} rows shown")
