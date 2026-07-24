@@ -155,6 +155,31 @@ if not run_log.empty:
         f"**Items:** {last.get('Items File','–')}"
     )
 
+# ── LKN food SKU master list with display names ────────────────────────────────
+_SKU_NAME_MAP = {
+    "34188": "LKN Miller Buns",
+    "30110": "Skin On Fries",
+    "6583":  "LKN Crispy Hot Wings",
+    "06583": "LKN Crispy Hot Wings",
+    "15661": "LKN Hot & Spicy Chicken Bites",
+    "18363": "LKN Southern Fried Chicken Strips",
+    "25788": "LKN Coated Chicken Burger",
+    "26214": "LKN Mince Beef Pucks",
+    "17339": "LKN Miami Burger Patty",
+    "26364": "LKN SKU 26364",
+    "23785": "LKN SKU 23785",
+    "32808": "LKN SKU 32808",
+    "12394": "Breaded Onion Rings",
+    "22667": "LKN Korean BBQ Sauce",
+    "22668": "LKN Deluxe BBQ Sauce",
+    "26222": "LKN Elite Burger Sauce",
+    "26227": "LKN Honey Buffalo Sauce",
+    "26229": "LKN Truffle Mayo",
+    "29053": "LKN Miso Mayo",
+    "30003": "LKN Ranch Sauce",
+}
+_FOOD_SKUS = set(_SKU_NAME_MAP.keys())
+
 # Week commencing selector (shown when multiple weeks available)
 _wc_col_exists = "Week_Commencing" in compliance.columns
 _all_weeks = []
@@ -234,52 +259,76 @@ with tab1:
             st.info("No site data available.")
 
     with c_deficit:
-        _gap_col   = "Portion_Gap" if HAS_PORTIONS else "Gap"
-        _unit_label = "portions" if HAS_PORTIONS else "units/g"
-        st.subheader(f"Top 10 Deficit SKUs ({_unit_label})")
-
-        # Only include food ingredient SKUs (excludes packaging/stickers)
-        _FOOD_SKUS = {
-            "34188","30110","06583","15661","18363","25788","26214",
-            "17339","26364","23785","32808","12394","22667","22668",
-            "26222","26227","26229","29053","30003",
-        }
+        _gap_col    = "Portion_Gap" if HAS_PORTIONS else "Gap"
+        _unit_label = "portions"    if HAS_PORTIONS else "units/g"
 
         if not compliance.empty and "Status" in compliance.columns:
-            _def_grp = (
-                compliance[
-                    (compliance["Status"] == "Deficit") &
-                    (compliance["SKU"].astype(str).isin(_FOOD_SKUS))
-                ]
-                .groupby(["SKU", "Ingredient"])
-                .agg(Total_Gap=(_gap_col, "sum"))
-                .reset_index()
+            _food = compliance[compliance["SKU"].astype(str).isin(_FOOD_SKUS)].copy()
+            _food["Display_Name"] = (
+                _food["SKU"].astype(str).map(_SKU_NAME_MAP).fillna(_food["Ingredient"])
             )
-            # Use absolute deficit so bars go right and labels don't clip
-            _def_grp["Abs_Gap"] = _def_grp["Total_Gap"].abs()
-            _def_grp = (
-                _def_grp.nlargest(10, "Abs_Gap")
-                # Sort ascending → largest deficit is LAST → renders at TOP
-                .sort_values("Abs_Gap", ascending=True)
-            )
-            if not _def_grp.empty:
-                _fig_def = px.bar(
-                    _def_grp, x="Abs_Gap", y="Ingredient",
-                    orientation="h",
-                    color_discrete_sequence=["#C00000"],
-                    labels={"Abs_Gap": f"Deficit ({_unit_label})", "Ingredient": ""},
-                    text=_def_grp["Abs_Gap"].apply(lambda v: f"{v:,.1f}"),
+
+            _nc_col, _comp_col = st.columns(2)
+
+            # ── Top 5 Non-Compliant SKUs ───────────────────────────────────────
+            with _nc_col:
+                st.markdown(f"**🔴 Top 5 Non-Compliant SKUs ({_unit_label})**")
+                _nc_grp = (
+                    _food[_food["Status"] == "Deficit"]
+                    .groupby("Display_Name")
+                    .agg(Deficit=(_gap_col, "sum"))
+                    .reset_index()
                 )
-                _fig_def.update_traces(textposition="outside")
-                _fig_def.update_layout(
-                    height=300,
-                    margin=dict(t=0, b=0, l=0, r=90),
+                _nc_grp["Deficit"] = _nc_grp["Deficit"].abs()
+                _nc5 = (_nc_grp.nlargest(5, "Deficit")
+                        .sort_values("Deficit", ascending=True))
+                if not _nc5.empty:
+                    _fig_nc = px.bar(
+                        _nc5, x="Deficit", y="Display_Name", orientation="h",
+                        color_discrete_sequence=["#C00000"],
+                        text=_nc5["Deficit"].apply(lambda v: f"{v:,.0f}"),
+                        labels={"Deficit": f"Deficit ({_unit_label})", "Display_Name": ""},
+                    )
+                    _fig_nc.update_traces(textposition="outside")
+                    _fig_nc.update_layout(height=250, margin=dict(t=10, b=0, l=0, r=70))
+                    st.plotly_chart(_fig_nc, use_container_width=True)
+                else:
+                    st.success("No deficits!")
+
+            # ── Top 5 Compliant SKUs ──────────────────────────────────────────
+            with _comp_col:
+                st.markdown("**🟢 Top 5 Compliant SKUs (% of sites)**")
+                _sku_site = (
+                    _food.groupby(["Display_Name", "Site_Key"])["Status"]
+                    .apply(lambda s: "Deficit" if (s == "Deficit").any() else "Compliant")
+                    .reset_index()
+                    .rename(columns={"Status": "Site_Status"})
                 )
-                st.plotly_chart(_fig_def, use_container_width=True)
-            else:
-                st.success("No deficits this week!")
-        else:
-            st.info("No compliance data.")
+                _comp_grp = (
+                    _sku_site.groupby("Display_Name")
+                    .apply(lambda x: round(
+                        (x["Site_Status"] == "Compliant").sum() / len(x) * 100, 1
+                    ))
+                    .reset_index()
+                    .rename(columns={0: "Compliance_%"})
+                )
+                _comp5 = (_comp_grp.nlargest(5, "Compliance_%")
+                          .sort_values("Compliance_%", ascending=True))
+                if not _comp5.empty:
+                    _fig_comp = px.bar(
+                        _comp5, x="Compliance_%", y="Display_Name", orientation="h",
+                        color_discrete_sequence=["#538135"],
+                        text=_comp5["Compliance_%"].apply(lambda v: f"{v:.1f}%"),
+                        labels={"Compliance_%": "Sites Compliant %", "Display_Name": ""},
+                    )
+                    _fig_comp.update_traces(textposition="outside")
+                    _fig_comp.update_layout(
+                        height=250, margin=dict(t=10, b=0, l=0, r=70),
+                        xaxis=dict(range=[0, 115], fixedrange=True),
+                    )
+                    st.plotly_chart(_fig_comp, use_container_width=True)
+                else:
+                    st.info("No compliant SKUs found.")
 
     st.divider()
 
