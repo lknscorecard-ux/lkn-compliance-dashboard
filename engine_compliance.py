@@ -94,7 +94,27 @@ def run(
 
     compliance["Required_Qty"] = compliance["Required_Qty"].fillna(0)
     compliance["Ordered_Qty"]  = compliance["Ordered_Qty"].fillna(0)
-    compliance["Gap"]          = compliance["Ordered_Qty"] - compliance["Required_Qty"]
+
+    # Normalise UOMs to grams / ml (1 ml ≈ 1 g for liquids) before computing gap
+    # so that e.g. an order in Litres is not compared raw against a Gram requirement.
+    _UOM_TO_G = {
+        "gram": 1, "grams": 1, "g": 1,
+        "ml": 1,                                              # 1 ml ≈ 1 g
+        "l": 1000, "litre": 1000, "litres": 1000,
+        "liter": 1000, "liters": 1000,
+        "kg": 1000, "kilogram": 1000, "kilograms": 1000,
+        "each": 1, "unit": 1, "units": 1,
+        "pcs": 1, "piece": 1, "pieces": 1,
+    }
+    _req_norm = (
+        compliance["Required_Qty"]
+        * compliance["Req_UOM"].fillna("").str.strip().str.lower().map(_UOM_TO_G).fillna(1)
+    )
+    _ord_norm = (
+        compliance["Ordered_Qty"]
+        * compliance["Ord_UOM"].fillna("").str.strip().str.lower().map(_UOM_TO_G).fillna(1)
+    )
+    compliance["Gap"] = _ord_norm - _req_norm
 
     compliance["Status"] = compliance["Gap"].apply(
         lambda g: "Surplus" if g > 0 else ("Deficit" if g < 0 else "Exact")
