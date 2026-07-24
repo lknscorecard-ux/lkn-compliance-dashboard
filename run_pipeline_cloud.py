@@ -330,6 +330,8 @@ def main():
     _write_tab(gc, results_id, "SKU Summary",              ingredient_summary)
     _write_tab(gc, results_id, "Recipe Summary",           summary_df)
     _write_tab(gc, results_id, "Unmatched",                unmatched_report)
+    if not bf_unmatched.empty:
+        _write_tab(gc, results_id, "Bidfood Unmatched",   bf_unmatched)
     if not pkg_compliance.empty:
         _write_tab(gc, results_id, "Packaging Compliance",  pkg_compliance)
         _write_tab(gc, results_id, "Packaging Site Summary", pkg_site_summ)
