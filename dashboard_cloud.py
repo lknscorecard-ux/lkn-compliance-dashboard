@@ -135,6 +135,12 @@ for c in ["Total_Raw_Qty", "Total_Cost"]:
     if c in ingredient_s.columns:
         ingredient_s[c] = pd.to_numeric(ingredient_s[c], errors="coerce").fillna(0)
 
+# ── Remap Status: Surplus/Exact → "Compliant", Deficit → "Non-Compliant" ──────
+if "Status" in compliance.columns:
+    compliance["Status"] = compliance["Status"].map({
+        "Surplus": "Compliant", "Exact": "Compliant", "Deficit": "Non-Compliant"
+    }).fillna(compliance["Status"])
+
 # ── Derived flags ──────────────────────────────────────────────────────────────
 HAS_PORTIONS = ("Portion_Gap" in compliance.columns
                 and pd.to_numeric(compliance["Portion_Gap"], errors="coerce").abs().sum() > 0)
@@ -259,71 +265,63 @@ with tab1:
             st.info("No site data available.")
 
     with c_deficit:
-        _gap_col    = "Portion_Gap" if HAS_PORTIONS else "Gap"
-        _unit_label = "portions"    if HAS_PORTIONS else "units/g"
-
         if not compliance.empty and "Status" in compliance.columns:
             _food = compliance[compliance["SKU"].astype(str).isin(_FOOD_SKUS)].copy()
             _food["Display_Name"] = (
                 _food["SKU"].astype(str).map(_SKU_NAME_MAP).fillna(_food["Ingredient"])
             )
 
+            # Per-SKU per-site status (one pass, used by both charts)
+            _sku_site = (
+                _food.groupby(["Display_Name", "Site_Key"])["Status"]
+                .apply(lambda s: "Non-Compliant" if (s == "Non-Compliant").any() else "Compliant")
+                .reset_index()
+                .rename(columns={"Status": "Site_Status"})
+            )
+
+            def _pct_sites(grp, label):
+                return (
+                    _sku_site.groupby("Display_Name")
+                    .apply(lambda x: round((x["Site_Status"] == label).sum() / len(x) * 100, 1))
+                    .reset_index()
+                    .rename(columns={0: "Pct"})
+                )
+
+            _nc_grp   = _pct_sites(_sku_site, "Non-Compliant")
+            _comp_grp = _pct_sites(_sku_site, "Compliant")
+            _nc5   = _nc_grp.nlargest(5, "Pct").sort_values("Pct", ascending=True)
+            _comp5 = _comp_grp.nlargest(5, "Pct").sort_values("Pct", ascending=True)
+
             _nc_col, _comp_col = st.columns(2)
 
-            # ── Top 5 Non-Compliant SKUs ───────────────────────────────────────
+            # ── Top 5 Non-Compliant SKUs (% of sites) ─────────────────────────
             with _nc_col:
-                st.markdown(f"**🔴 Top 5 Non-Compliant SKUs ({_unit_label})**")
-                _nc_grp = (
-                    _food[_food["Status"] == "Deficit"]
-                    .groupby("Display_Name")
-                    .agg(Deficit=(_gap_col, "sum"))
-                    .reset_index()
-                )
-                _nc_grp["Deficit"] = _nc_grp["Deficit"].abs()
-                _nc5 = (_nc_grp.nlargest(5, "Deficit")
-                        .sort_values("Deficit", ascending=True))
+                st.markdown("**🔴 Top 5 Non-Compliant SKUs (% of sites)**")
                 if not _nc5.empty:
-                    _nc_max = _nc5["Deficit"].max() if not _nc5.empty else 100
                     _fig_nc = px.bar(
-                        _nc5, x="Deficit", y="Display_Name", orientation="h",
+                        _nc5, x="Pct", y="Display_Name", orientation="h",
                         color_discrete_sequence=["#C00000"],
-                        text=_nc5["Deficit"].apply(lambda v: f"{v:,.0f}"),
-                        labels={"Deficit": f"Deficit ({_unit_label})", "Display_Name": ""},
+                        text=_nc5["Pct"].apply(lambda v: f"{v:.1f}%"),
+                        labels={"Pct": "Sites Non-Compliant %", "Display_Name": ""},
                     )
                     _fig_nc.update_traces(textposition="outside")
                     _fig_nc.update_layout(
                         height=250, margin=dict(t=10, b=0, l=0, r=20),
-                        xaxis=dict(range=[0, _nc_max * 1.35], fixedrange=True),
+                        xaxis=dict(range=[0, 135], fixedrange=True),
                     )
                     st.plotly_chart(_fig_nc, use_container_width=True)
                 else:
-                    st.success("No deficits!")
+                    st.success("No non-compliant SKUs!")
 
-            # ── Top 5 Compliant SKUs ──────────────────────────────────────────
+            # ── Top 5 Compliant SKUs (% of sites) ─────────────────────────────
             with _comp_col:
                 st.markdown("**🟢 Top 5 Compliant SKUs (% of sites)**")
-                _sku_site = (
-                    _food.groupby(["Display_Name", "Site_Key"])["Status"]
-                    .apply(lambda s: "Deficit" if (s == "Deficit").any() else "Compliant")
-                    .reset_index()
-                    .rename(columns={"Status": "Site_Status"})
-                )
-                _comp_grp = (
-                    _sku_site.groupby("Display_Name")
-                    .apply(lambda x: round(
-                        (x["Site_Status"] == "Compliant").sum() / len(x) * 100, 1
-                    ))
-                    .reset_index()
-                    .rename(columns={0: "Compliance_%"})
-                )
-                _comp5 = (_comp_grp.nlargest(5, "Compliance_%")
-                          .sort_values("Compliance_%", ascending=True))
                 if not _comp5.empty:
                     _fig_comp = px.bar(
-                        _comp5, x="Compliance_%", y="Display_Name", orientation="h",
+                        _comp5, x="Pct", y="Display_Name", orientation="h",
                         color_discrete_sequence=["#538135"],
-                        text=_comp5["Compliance_%"].apply(lambda v: f"{v:.1f}%"),
-                        labels={"Compliance_%": "Sites Compliant %", "Display_Name": ""},
+                        text=_comp5["Pct"].apply(lambda v: f"{v:.1f}%"),
+                        labels={"Pct": "Sites Compliant %", "Display_Name": ""},
                     )
                     _fig_comp.update_traces(textposition="outside")
                     _fig_comp.update_layout(
@@ -430,7 +428,7 @@ with tab2:
                       + sorted(compliance["Site_Key"].dropna().astype(str).unique().tolist()))
             _sel_site = st.selectbox("Site", _sites, key="sites_site_filter")
         with _f2:
-            _sel_status = st.selectbox("Status", ["All", "Surplus", "Deficit", "Exact"],
+            _sel_status = st.selectbox("Status", ["All", "Compliant", "Non-Compliant"],
                                        key="sites_status_filter")
         with _f3:
             _sku_col  = "SKU" if "SKU" in compliance.columns else compliance.columns[2]
@@ -445,50 +443,51 @@ with tab2:
         if _sel_skus:            _disp2 = _disp2[_disp2[_sku_col].isin(_sel_skus)]
 
         def _status_bg(val):
-            _c = {"Surplus": "#E5F5E0", "Deficit": "#FFE8E8", "Exact": "#E8F0FF"}
+            _c = {"Compliant": "#E5F5E0", "Non-Compliant": "#FFE8E8"}
             return f"background-color: {_c.get(val, '')}"
 
-        # ── Column visibility (session-persistent) ────────────────────────────
-        # Default: hide raw qty/UOM columns; Status always last
+        # ── Columns shown globally (change in code to update for all users) ──
+        # Hidden: raw qty/UOM columns + Week_Commencing
+        _HIDDEN_COLS = {"Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap",
+                        "Week_Commencing"}
+        _COL_RENAME  = {
+            "Portion_Required": "Portion_Required (Consumed)",
+            "Portion_Ordered":  "Portion_Ordered (Bidfood)",
+        }
         _all_possible = [c for c in
                          ["Week_Commencing", "Site_Key", "Store_Name", "SKU", "Ingredient",
                           "Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap",
                           "Portion_Required", "Portion_Ordered", "Portion_Gap", "Status"]
                          if c in _disp2.columns]
-        _hidden_by_default = {"Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap"}
-
-        # Initialise session state once (persists until page refresh / tab close)
-        if "sites_visible_cols" not in st.session_state:
-            st.session_state["sites_visible_cols"] = [
-                c for c in _all_possible if c not in _hidden_by_default
-            ]
-
-        with st.expander("⚙️ Show / Hide Columns"):
-            _toggled = st.multiselect(
-                "Visible columns (changes apply to everyone — remove to hide, add to show)",
-                options=_all_possible,
-                default=st.session_state["sites_visible_cols"],
-                key="sites_visible_cols",
-            )
-
-        # Enforce Status last if it's in the selection
-        _show_cols = [c for c in _toggled if c != "Status"]
-        if "Status" in _toggled:
+        # Status always last; hidden cols excluded
+        _show_cols = [c for c in _all_possible if c not in _HIDDEN_COLS and c != "Status"]
+        if "Status" in _all_possible:
             _show_cols.append("Status")
 
-        _num_cols_1dp = [c for c in ["Required_Qty","Ordered_Qty","Gap"] if c in _show_cols]
-        _num_cols_0dp = [c for c in ["Portion_Required","Portion_Ordered","Portion_Gap"] if c in _show_cols]
+        # Apply display rename
+        _disp2_show = _disp2[_show_cols].rename(columns={
+            k: v for k, v in _COL_RENAME.items() if k in _show_cols
+        })
+        _show_renamed = list(_disp2_show.columns)
+
+        _num_cols_1dp = [c for c in
+                         ["Required_Qty", "Ordered_Qty", "Gap"] if c in _show_renamed]
+        _pr_col = _COL_RENAME.get("Portion_Required", "Portion_Required")
+        _po_col = _COL_RENAME.get("Portion_Ordered",  "Portion_Ordered")
+        _num_cols_0dp = [c for c in
+                         [_pr_col, _po_col, "Portion_Gap"] if c in _show_renamed]
         _detail_fmt = {c: "{:.1f}" for c in _num_cols_1dp}
         _detail_fmt.update({c: "{:.0f}" for c in _num_cols_0dp})
-        _detail_styled = _disp2[_show_cols].style.format(_detail_fmt)
-        if "Status" in _show_cols:
-            _detail_styled = _detail_styled.map(_status_bg, subset=["Status"])
+        _detail_styled = _disp2_show.style.format(_detail_fmt)
+        _status_disp = "Status" if "Status" in _show_renamed else None
+        if _status_disp:
+            _detail_styled = _detail_styled.map(_status_bg, subset=[_status_disp])
         st.dataframe(_detail_styled, use_container_width=True, height=520)
         st.caption(f"{len(_disp2):,} rows shown")
 
         st.download_button(
             "⬇️ Download Filtered Results (CSV)",
-            data=_to_csv(_disp2[_show_cols]),
+            data=_to_csv(_disp2_show),
             file_name="lkn_compliance_detail.csv",
             mime="text/csv",
             key="sites_download",
@@ -531,7 +530,3 @@ with tab2:
                         st.info("No Bidfood orders for this SKU.")
                 else:
                     st.info("No Bidfood stock data loaded.")
-
-
-        else:
-            st.info("No Bidfood stock data.")
