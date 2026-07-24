@@ -454,10 +454,35 @@ with tab2:
                           "Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap",
                           "Portion_Required", "Portion_Ordered", "Portion_Gap", "Status"]
                          if c in _disp2.columns]
-        # Status always last; hidden cols excluded
-        _show_cols = [c for c in _all_possible if c not in _HIDDEN_COLS and c != "Status"]
-        if "Status" in _all_possible:
-            _show_cols.append("Status")
+
+        # Display names for the toggle UI (same as _COL_RENAME where applicable)
+        _col_display = {c: _COL_RENAME.get(c, c) for c in _all_possible}
+        _display_to_raw = {v: k for k, v in _col_display.items()}
+
+        # Default visible = everything except the hidden set; Status always last
+        _default_visible_display = [
+            _col_display[c] for c in _all_possible
+            if c not in _HIDDEN_COLS and c != "Status"
+        ] + (["Status"] if "Status" in _all_possible else [])
+
+        # Session-state key: initialise once per session
+        if "sites_col_toggle" not in st.session_state:
+            st.session_state["sites_col_toggle"] = _default_visible_display
+
+        with st.expander("⚙️ Show / Hide Columns"):
+            st.caption("Changes apply for your session. Ask admin to change the default for everyone.")
+            _toggled_display = st.multiselect(
+                "Visible columns",
+                options=[_col_display[c] for c in _all_possible],
+                default=st.session_state["sites_col_toggle"],
+                key="sites_col_toggle",
+            )
+
+        # Map back to raw column names; Status always last
+        _show_cols_raw = [_display_to_raw[d] for d in _toggled_display if d != "Status"]
+        if "Status" in [_display_to_raw.get(d) for d in _toggled_display]:
+            _show_cols_raw.append("Status")
+        _show_cols = _show_cols_raw
 
         # Apply display rename
         _disp2_show = _disp2[_show_cols].rename(columns={
