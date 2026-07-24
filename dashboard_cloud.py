@@ -417,7 +417,7 @@ with tab2:
     st.subheader("Site-level Compliance Detail")
 
     if not compliance.empty:
-        _f1, _f2, _f3 = st.columns(3)
+        _f1, _f2, _f3, _f4 = st.columns(4)
         with _f1:
             _sites = (["All"]
                       + sorted(compliance["Site_Key"].dropna().astype(str).unique().tolist()))
@@ -431,11 +431,20 @@ with tab2:
             _sel_skus = st.multiselect("SKU", _all_skus,
                                        placeholder="All SKUs",
                                        key="sites_sku_filter")
+        with _f4:
+            _all_ingredients = (
+                sorted(compliance["Ingredient"].dropna().astype(str).unique().tolist())
+                if "Ingredient" in compliance.columns else []
+            )
+            _sel_ingredients = st.multiselect("Ingredient", _all_ingredients,
+                                              placeholder="All Ingredients",
+                                              key="sites_ingredient_filter")
 
         _disp2 = compliance.copy()
-        if _sel_site  != "All": _disp2 = _disp2[_disp2["Site_Key"] == _sel_site]
-        if _sel_status != "All": _disp2 = _disp2[_disp2["Status"]   == _sel_status]
-        if _sel_skus:            _disp2 = _disp2[_disp2[_sku_col].astype(str).isin(_sel_skus)]
+        if _sel_site        != "All": _disp2 = _disp2[_disp2["Site_Key"] == _sel_site]
+        if _sel_status      != "All": _disp2 = _disp2[_disp2["Status"]   == _sel_status]
+        if _sel_skus:                 _disp2 = _disp2[_disp2[_sku_col].astype(str).isin(_sel_skus)]
+        if _sel_ingredients:          _disp2 = _disp2[_disp2["Ingredient"].isin(_sel_ingredients)]
 
         def _status_bg(val):
             _c = {"Compliant": "#E5F5E0", "Non-Compliant": "#FFE8E8"}
