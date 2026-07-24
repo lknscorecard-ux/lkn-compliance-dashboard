@@ -171,11 +171,6 @@ _SKU_NAME_MAP = {
     "18363": "LKN Southern Fried Chicken Strips",
     "25788": "LKN Coated Chicken Burger",
     "26214": "LKN Mince Beef Pucks",
-    "17339": "LKN Miami Burger Patty",
-    "26364": "LKN SKU 26364",
-    "23785": "LKN SKU 23785",
-    "32808": "LKN SKU 32808",
-    "12394": "Breaded Onion Rings",
     "22667": "LKN Korean BBQ Sauce",
     "22668": "LKN Deluxe BBQ Sauce",
     "26222": "LKN Elite Burger Sauce",
@@ -440,7 +435,7 @@ with tab2:
         _disp2 = compliance.copy()
         if _sel_site  != "All": _disp2 = _disp2[_disp2["Site_Key"] == _sel_site]
         if _sel_status != "All": _disp2 = _disp2[_disp2["Status"]   == _sel_status]
-        if _sel_skus:            _disp2 = _disp2[_disp2[_sku_col].isin(_sel_skus)]
+        if _sel_skus:            _disp2 = _disp2[_disp2[_sku_col].astype(str).isin(_sel_skus)]
 
         def _status_bg(val):
             _c = {"Compliant": "#E5F5E0", "Non-Compliant": "#FFE8E8"}
