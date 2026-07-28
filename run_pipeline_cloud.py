@@ -120,6 +120,44 @@ def _write_tab(gc: gspread.Client, sheet_id: str, tab: str, df: pd.DataFrame):
     log.info("  ✓ %-35s  %d rows", tab, len(df))
 
 
+def _append_history(gc: gspread.Client, sheet_id: str, tab: str, df: pd.DataFrame):
+    """Append df rows to a history tab (creates tab + header if absent)."""
+    sh = gc.open_by_key(sheet_id)
+    df = df.fillna("").astype(str)
+    try:
+        ws = sh.worksheet(tab)
+        existing = ws.get_all_values()
+        if not existing:
+            ws.append_rows([df.columns.tolist()] + df.values.tolist())
+        else:
+            ws.append_rows(df.values.tolist())
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(
+            title=tab,
+            rows=max(len(df) + 200, 1000),
+            cols=max(len(df.columns) + 2, 20),
+        )
+        ws.append_rows([df.columns.tolist()] + df.values.tolist())
+    log.info("  ✓ %-35s  +%d rows (history)", tab, len(df))
+
+
+def _load_stock_on_hand(gc: gspread.Client, sheet_id: str) -> pd.DataFrame:
+    """Load previous week's closing stock. Returns empty DataFrame if not found."""
+    try:
+        sh  = gc.open_by_key(sheet_id)
+        ws  = sh.worksheet("Stock on Hand")
+        recs = ws.get_all_records()
+        if not recs:
+            return pd.DataFrame()
+        df = pd.DataFrame(recs)
+        df["Closing_Stock_g"] = pd.to_numeric(
+            df.get("Closing_Stock_g", 0), errors="coerce"
+        ).fillna(0)
+        return df
+    except gspread.exceptions.WorksheetNotFound:
+        return pd.DataFrame()
+
+
 def _append_run_log(gc, sheet_id, run_ts, found, stats):
     sh  = gc.open_by_key(sheet_id)
     try:
@@ -173,7 +211,8 @@ def main():
     }
     # Optional files
     OPTIONAL_KEYWORDS = {
-        "opalion": "Line Item Details",   # Opalion packaging CSV
+        "opalion":    "Line Item Details",  # Opalion packaging CSV
+        "stock_seed": "stock_seed",         # One-time opening stock seed (previous week's processed_data renamed)
     }
     found = {}
     for key, kw in {**REQUIRED_KEYWORDS, **OPTIONAL_KEYWORDS}.items():
@@ -221,6 +260,38 @@ def main():
         mapping_df[col] = mapping_df[col].str.strip()
     log.info("  Mapping: %d sites loaded", len(mapping_df))
 
+    # ── [3b] Seed "Stock on Hand" from previous week's Bidfood file (one-time) ──
+    # Upload last week's processed_data renamed to include "stock_seed" in the
+    # filename alongside the 3 weekly files. The pipeline converts it to grams,
+    # writes "Stock on Hand", archives the file, and never needs it again.
+    if "stock_seed" in found and _load_stock_on_hand(gc, results_id).empty:
+        log.info("[3b] Stock seed file found — seeding opening stock ...")
+        try:
+            seed_buf = _download(drive, found["stock_seed"]["id"])
+            seed_df  = pd.read_excel(seed_buf, dtype=str, engine="openpyxl")
+            seed_df.columns = seed_df.columns.str.strip()
+            # Reuse engine_bidfood to convert cases → grams per site×SKU
+            import engine_bidfood as _eb
+            _seed_stock, _, _, _ = _eb.run(seed_df, mapping_df)
+            _seed_soh = (
+                _seed_stock
+                .groupby(["Site_Key", "Product Code"], as_index=False)
+                .agg(Closing_Stock_g=("Total_Ordered_Qty", "sum"))
+                .rename(columns={"Product Code": "SKU"})
+            )
+            _seed_soh["Closing_Stock_g"] = pd.to_numeric(
+                _seed_soh["Closing_Stock_g"], errors="coerce"
+            ).fillna(0).round(1)
+            _seed_soh["Week_Commencing"] = "seed"
+            _write_tab(gc, results_id, "Stock on Hand", _seed_soh)
+            _archive(drive, found["stock_seed"]["id"], folder_id)
+            log.info("  Stock seed: %d site×SKU rows written to 'Stock on Hand'", len(_seed_soh))
+        except Exception as _se:
+            log.warning("  Stock seed failed: %s — continuing with zero opening stock", _se)
+    elif "stock_seed" in found:
+        log.info("  Stock seed file found but 'Stock on Hand' already exists — skipping seed, archiving.")
+        _archive(drive, found["stock_seed"]["id"], folder_id)
+
     # ── [4/6] Load static reference files (baked into Docker image) ───────────
     log.info("[4/6] Loading static reference files ...")
     APP_DIR  = os.path.dirname(os.path.abspath(__file__))
@@ -257,7 +328,19 @@ def main():
         mapping_df["Store Name"].str.strip(),
         mapping_df["Site Key"].str.strip(),
     ))
-    compliance = engine_compliance.run(site_raw, site_stock, store_site_map=_store_site_map)
+    # Load previous week's closing stock (rolling inventory carry-forward)
+    log.info("         Loading Stock on Hand (opening stock carry-forward) ...")
+    _opening_stock = _load_stock_on_hand(gc, results_id)
+    if not _opening_stock.empty:
+        log.info("  Opening stock: %d site×SKU rows loaded", len(_opening_stock))
+    else:
+        log.info("  Opening stock: none found — first run or reset")
+
+    compliance = engine_compliance.run(
+        site_raw, site_stock,
+        store_site_map=_store_site_map,
+        opening_stock=_opening_stock if not _opening_stock.empty else None,
+    )
     site_summ  = engine_compliance.site_summary(compliance)
 
     surplus = int((compliance["Status"] == "Surplus").sum())
@@ -305,6 +388,25 @@ def main():
     _wc = (_run_dt - timedelta(days=_run_dt.weekday())).strftime("%Y-%m-%d")
     compliance.insert(0, "Week_Commencing", _wc)
     site_summ.insert(0, "Week_Commencing", _wc)
+
+    # ── Save closing stock → next week's opening stock ────────────────────────
+    # One row per Site × SKU with the stock remaining after this week's consumption.
+    _stock_cols = [c for c in ["Site_Key","SKU","Ingredient","Closing_Stock_g","Week_Commencing"]
+                   if c in compliance.columns]
+    _stock_on_hand = (
+        compliance[_stock_cols]
+        .groupby(["Site_Key","SKU"], as_index=False)
+        .agg(
+            Ingredient      =("Ingredient",      "first"),
+            Closing_Stock_g =("Closing_Stock_g", "sum"),
+            Week_Commencing =("Week_Commencing",  "first"),
+        )
+    )
+    _write_tab(gc, results_id, "Stock on Hand", _stock_on_hand)
+
+    # ── Append this week to history sheets (never overwritten) ────────────────
+    _append_history(gc, results_id, "Compliance History",    compliance)
+    _append_history(gc, results_id, "Site Summary History",  site_summ)
 
     # Packaging (optional)
     pkg_compliance  = pd.DataFrame()

@@ -74,14 +74,34 @@ def _load_all_sheets() -> dict:
     gc  = _get_gc()
     sh  = gc.open_by_key(sid)
     out = {}
-    for tab in ["Compliance Gap", "Site Summary",
-                "Ingredient Requirements", "Bidfood Stock", "Run Log"]:
+
+    # For compliance + site summary: prefer history tab (all weeks) over current tab
+    for hist_tab, cur_tab in [
+        ("Compliance History",   "Compliance Gap"),
+        ("Site Summary History", "Site Summary"),
+    ]:
+        loaded = False
+        for tab_name in [hist_tab, cur_tab]:
+            try:
+                recs = sh.worksheet(tab_name).get_all_records()
+                out["Compliance Gap" if "Compliance" in tab_name else "Site Summary"] = (
+                    pd.DataFrame(recs) if recs else pd.DataFrame()
+                )
+                loaded = True
+                time.sleep(1)
+                break
+            except Exception:
+                pass
+        if not loaded:
+            out["Compliance Gap" if hist_tab == "Compliance History" else "Site Summary"] = pd.DataFrame()
+
+    for tab in ["Ingredient Requirements", "Bidfood Stock", "Run Log"]:
         try:
             recs       = sh.worksheet(tab).get_all_records()
             out[tab]   = pd.DataFrame(recs) if recs else pd.DataFrame()
         except Exception:
             out[tab]   = pd.DataFrame()
-        time.sleep(1)   # respect Sheets API 60 reads/min quota
+        time.sleep(1)
     return out
 
 def _safe(tab: str) -> pd.DataFrame:
@@ -121,6 +141,7 @@ if compliance.empty:
 
 # ── Numeric coercion ───────────────────────────────────────────────────────────
 _num_compliance = ["Required_Qty", "Ordered_Qty", "Gap",
+                   "Opening_Stock_g", "Closing_Stock_g",
                    "Portion_Required", "Portion_Ordered", "Portion_Gap"]
 for c in _num_compliance:
     if c in compliance.columns:
@@ -453,14 +474,16 @@ with tab2:
         # ── Columns shown globally (change in code to update for all users) ──
         # Hidden: raw qty/UOM columns + Week_Commencing
         _HIDDEN_COLS = {"Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap",
-                        "Week_Commencing"}
+                        "Opening_Stock_g", "Week_Commencing"}
         _COL_RENAME  = {
             "Portion_Required": "Portion_Required (Consumed)",
             "Portion_Ordered":  "Portion_Ordered (Bidfood)",
+            "Closing_Stock_g":  "Carry Forward Stock (g)",
         }
         _all_possible = [c for c in
                          ["Week_Commencing", "Site_Key", "Store_Name", "SKU", "Ingredient",
-                          "Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap",
+                          "Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM",
+                          "Opening_Stock_g", "Gap", "Closing_Stock_g",
                           "Portion_Required", "Portion_Ordered", "Portion_Gap", "Status"]
                          if c in _disp2.columns]
 

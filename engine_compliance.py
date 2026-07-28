@@ -12,6 +12,7 @@ def run(
     site_raw: pd.DataFrame,
     site_stock: pd.DataFrame,
     store_site_map: dict | None = None,
+    opening_stock: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Merge ingredient requirements (B) vs Bidfood stock (A) and compute gap.
@@ -136,11 +137,35 @@ def run(
     # Friendly column names for dashboard
     compliance = compliance.rename(columns={"Product_Code":"SKU"})
 
+    # ── Rolling inventory: opening stock carry-forward ────────────────────────
+    # opening_stock: DataFrame with columns [Site_Key, SKU, Closing_Stock_g]
+    # from the previous week's run. If absent (first run), defaults to 0.
+    compliance["Opening_Stock_g"] = 0.0
+    if opening_stock is not None and not opening_stock.empty:
+        _os_map = (
+            opening_stock
+            .assign(SKU=lambda d: d["SKU"].astype(str))
+            .set_index(["Site_Key", "SKU"])["Closing_Stock_g"]
+            .to_dict()
+        )
+        compliance["Opening_Stock_g"] = compliance.apply(
+            lambda r: float(_os_map.get((r["Site_Key"], str(r["SKU"])), 0.0)),
+            axis=1,
+        )
+
+    # Recompute Gap = (Ordered + Opening) − Required  (all in normalised g/ml)
+    compliance["Gap"] = (_ord_norm + compliance["Opening_Stock_g"]) - _req_norm
+    compliance["Status"] = compliance["Gap"].apply(
+        lambda g: "Surplus" if g > 0 else ("Deficit" if g < 0 else "Exact")
+    )
+    # Closing stock = stock remaining after this week's consumption (≥ 0)
+    compliance["Closing_Stock_g"] = compliance["Gap"].clip(lower=0).round(1)
+
     cols = [
         "Site_Key","Store_Name","SKU","Ingredient",
         "Required_Qty","Req_UOM",
         "Ordered_Qty","Ord_UOM",
-        "Gap","Status",
+        "Opening_Stock_g","Gap","Closing_Stock_g","Status",
     ]
     for c in cols:
         if c not in compliance.columns:
