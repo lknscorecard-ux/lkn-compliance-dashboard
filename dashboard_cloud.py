@@ -76,32 +76,37 @@ def _load_all_sheets() -> dict:
     sh  = gc.open_by_key(sid)
     out = {}
 
+    def _read_tab(ws_name):
+        """Read a worksheet safely using get_all_values (no duplicate-header crash)."""
+        try:
+            raw = sh.worksheet(ws_name).get_all_values()
+            if not raw or len(raw) < 2:
+                return pd.DataFrame()
+            df = pd.DataFrame(raw[1:], columns=raw[0]).fillna("").astype(str)
+            df.columns = df.columns.str.strip()
+            df = df.loc[:, ~df.columns.duplicated()]
+            return df
+        except Exception:
+            return pd.DataFrame()
+
     # For compliance + site summary: prefer history tab (all weeks) over current tab
-    for hist_tab, cur_tab in [
-        ("Compliance History",   "Compliance Gap"),
-        ("Site Summary History", "Site Summary"),
+    for hist_tab, cur_tab, out_key in [
+        ("Compliance History",   "Compliance Gap", "Compliance Gap"),
+        ("Site Summary History", "Site Summary",   "Site Summary"),
     ]:
         loaded = False
         for tab_name in [hist_tab, cur_tab]:
-            try:
-                recs = sh.worksheet(tab_name).get_all_records()
-                out["Compliance Gap" if "Compliance" in tab_name else "Site Summary"] = (
-                    pd.DataFrame(recs) if recs else pd.DataFrame()
-                )
+            df = _read_tab(tab_name)
+            if not df.empty:
+                out[out_key] = df
                 loaded = True
                 time.sleep(1)
                 break
-            except Exception:
-                pass
         if not loaded:
-            out["Compliance Gap" if hist_tab == "Compliance History" else "Site Summary"] = pd.DataFrame()
+            out[out_key] = pd.DataFrame()
 
     for tab in ["Ingredient Requirements", "Bidfood Stock", "Run Log"]:
-        try:
-            recs       = sh.worksheet(tab).get_all_records()
-            out[tab]   = pd.DataFrame(recs) if recs else pd.DataFrame()
-        except Exception:
-            out[tab]   = pd.DataFrame()
+        out[tab] = _read_tab(tab)
         time.sleep(1)
     return out
 
@@ -574,10 +579,11 @@ with tab2:
         _HIDDEN_COLS = {"Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap",
                         "Opening_Stock_g", "Closing_Stock_g", "Week_Commencing"}
         _COL_RENAME  = {
-            "Portion_Required":       "Portion_Required (Consumed)",
-            "Portion_Ordered":        "Portion_Ordered (Bidfood)",
-            "Portion_Gap":            "Portion_Gap",
-            "Carry_Forward_Portions": "Carry Forward (Portions)",
+            "Portion_Required":       "Portions Used",
+            "Portion_Ordered":        "Portions Ordered",
+            "Portion_Gap":            "Ordered vs Used (Variance)",
+            "Carry_Forward_Portions": "Stock Carried Forward",
+            "Status":                 "Compliance Status",
         }
         _all_possible = [c for c in
                          ["Week_Commencing", "Site_Key", "Store_Name", "SKU", "Ingredient",
@@ -591,11 +597,12 @@ with tab2:
         _col_display = {c: _COL_RENAME.get(c, c) for c in _all_possible}
         _display_to_raw = {v: k for k, v in _col_display.items()}
 
-        # Default visible = everything except the hidden set; Status always last
+        # Default visible = everything except the hidden set; Status (renamed) always last
+        _st_display = _col_display.get("Status", "Status")
         _default_visible_display = [
             _col_display[c] for c in _all_possible
             if c not in _HIDDEN_COLS and c != "Status"
-        ] + (["Status"] if "Status" in _all_possible else [])
+        ] + ([_st_display] if "Status" in _all_possible else [])
 
         # Session-state key: initialise once per session
         if "sites_col_toggle" not in st.session_state:
@@ -610,8 +617,8 @@ with tab2:
                 key="sites_col_toggle",
             )
 
-        # Map back to raw column names; Status always last
-        _show_cols_raw = [_display_to_raw[d] for d in _toggled_display if d != "Status"]
+        # Map back to raw column names; Status (renamed) always last
+        _show_cols_raw = [_display_to_raw[d] for d in _toggled_display if d != _st_display]
         if "Status" in [_display_to_raw.get(d) for d in _toggled_display]:
             _show_cols_raw.append("Status")
         _show_cols = _show_cols_raw
@@ -624,18 +631,33 @@ with tab2:
 
         _num_cols_1dp = [c for c in
                          ["Required_Qty", "Ordered_Qty", "Gap"] if c in _show_renamed]
-        _pr_col = _COL_RENAME.get("Portion_Required",       "Portion_Required")
-        _po_col = _COL_RENAME.get("Portion_Ordered",        "Portion_Ordered")
-        _cf_col = _COL_RENAME.get("Carry_Forward_Portions", "Carry Forward (Portions)")
+        _pr_col = _COL_RENAME.get("Portion_Required",       "Portions Used")
+        _po_col = _COL_RENAME.get("Portion_Ordered",        "Portions Ordered")
+        _pg_col = _COL_RENAME.get("Portion_Gap",            "Ordered vs Used (Variance)")
+        _cf_col = _COL_RENAME.get("Carry_Forward_Portions", "Stock Carried Forward")
         _num_cols_0dp = [c for c in
-                         [_pr_col, _po_col, "Portion_Gap", _cf_col] if c in _show_renamed]
+                         [_pr_col, _po_col, _pg_col, _cf_col] if c in _show_renamed]
         _detail_fmt = {c: "{:.1f}" for c in _num_cols_1dp}
         _detail_fmt.update({c: "{:.0f}" for c in _num_cols_0dp})
         _detail_styled = _disp2_show.style.format(_detail_fmt)
-        _status_disp = "Status" if "Status" in _show_renamed else None
-        if _status_disp:
+        _status_disp = _COL_RENAME.get("Status", "Status") if "Status" in _show_cols else None
+        if _status_disp and _status_disp in _disp2_show.columns:
             _detail_styled = _detail_styled.map(_status_bg, subset=[_status_disp])
-        st.dataframe(_detail_styled, use_container_width=True, height=520)
+        _col_help = {
+            "SKU":                        "Unique product code assigned by Bidfood for this ingredient.",
+            "Ingredient":                 "Ingredient/product name as listed in the recipe or menu spec.",
+            "Portions Used":              "Number of portions consumed at this site, based on sales/recipe data, for the selected period.",
+            "Portions Ordered":           "Number of portions ordered from Bidfood for this ingredient in the selected period.",
+            "Ordered vs Used (Variance)": "Ordered minus Used. Positive = more ordered than consumed (surplus). Negative = ordered less than consumed (shortfall).",
+            "Stock Carried Forward":      "Portions remaining in stock, carried over from previous period(s) after accounting for usage and new orders.",
+            "Compliance Status":          "Compliant = ordering matches or exceeds usage needs. Non-Compliant = shortfall detected (negative variance with no carried-forward stock to cover it).",
+        }
+        _col_config = {
+            col: st.column_config.TextColumn(col, help=tip)
+            for col, tip in _col_help.items()
+            if col in _disp2_show.columns
+        }
+        st.dataframe(_detail_styled, use_container_width=True, height=520, column_config=_col_config)
         st.caption(f"{len(_disp2):,} rows shown")
 
         st.download_button(
