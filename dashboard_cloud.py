@@ -474,14 +474,30 @@ with tab1:
                 return ""
 
         _disp = site_summ.copy()
-        _int_cols   = [c for c in ["Rank","Deficit","Surplus","Exact","Total_SKUs"] if c in _disp.columns]
+        # Merge Surplus + Exact → Compliant SKUs
+        if "Surplus" in _disp.columns and "Exact" in _disp.columns:
+            _disp["Compliant SKUs"] = _disp["Surplus"] + _disp["Exact"]
+        elif "Surplus" in _disp.columns:
+            _disp["Compliant SKUs"] = _disp["Surplus"]
+        # Select and rename columns for display
+        _col_map = {
+            "Rank":           "Rank",
+            "Store_Name":     "Store",
+            "Compliant SKUs": "Compliant SKUs",
+            "Deficit":        "Non-Compliant SKUs",
+            "Total_SKUs":     "Total SKUs",
+            "Compliance_%":   "Compliance %",
+        }
+        _disp = _disp[[c for c in _col_map if c in _disp.columns]].rename(columns=_col_map)
+        _int_cols = [c for c in ["Rank","Compliant SKUs","Non-Compliant SKUs","Total SKUs"] if c in _disp.columns]
         _fmt = {c: "{:.0f}" for c in _int_cols}
-        if "Compliance_%" in _disp.columns:
-            _fmt["Compliance_%"] = "{:.1f}%"
+        if "Compliance %" in _disp.columns:
+            _fmt["Compliance %"] = "{:.1f}%"
         _styled = (
             _disp.style
             .format(_fmt)
-            .map(_pct_color, subset=["Compliance_%"] if "Compliance_%" in _disp.columns else [])
+            .map(_pct_color, subset=["Compliance %"] if "Compliance %" in _disp.columns else [])
+            .hide(axis="index")
         )
         st.dataframe(_styled, use_container_width=True, height=400)
 
