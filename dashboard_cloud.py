@@ -135,9 +135,28 @@ def _to_csv(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8")
 
 # ── Header ─────────────────────────────────────────────────────────────────────
+import base64, pathlib
+def _logo_b64():
+    try:
+        p = pathlib.Path(__file__).parent / "lkn_logo.png"
+        return base64.b64encode(p.read_bytes()).decode()
+    except Exception:
+        return ""
+
+_logo = _logo_b64()
+
 h1, h2, h3 = st.columns([3, 1, 1])
 with h1:
-    st.title("🍗 LKN Compliance Dashboard")
+    if _logo:
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:16px;">'
+            f'<img src="data:image/png;base64,{_logo}" style="height:70px;width:auto;">'
+            f'<span style="font-size:1.8rem;font-weight:700;">LKN Compliance Dashboard</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.title("LKN Compliance Dashboard")
 with h2:
     if st.button("▶ Run Pipeline Now", type="primary", use_container_width=True):
         with st.spinner("Triggering pipeline …"):
