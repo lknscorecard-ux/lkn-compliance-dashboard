@@ -142,7 +142,8 @@ if compliance.empty:
 # ── Numeric coercion ───────────────────────────────────────────────────────────
 _num_compliance = ["Required_Qty", "Ordered_Qty", "Gap",
                    "Opening_Stock_g", "Closing_Stock_g",
-                   "Portion_Required", "Portion_Ordered", "Portion_Gap"]
+                   "Portion_Required", "Portion_Ordered", "Portion_Gap",
+                   "Carry_Forward_Portions"]
 for c in _num_compliance:
     if c in compliance.columns:
         compliance[c] = pd.to_numeric(compliance[c], errors="coerce").fillna(0)
@@ -155,6 +156,16 @@ for c in _num_site:
 for c in ["Total_Raw_Qty", "Total_Cost"]:
     if c in ingredient_s.columns:
         ingredient_s[c] = pd.to_numeric(ingredient_s[c], errors="coerce").fillna(0)
+
+# ── Derive Carry_Forward_Portions from existing columns (no pipeline rerun needed) ──
+if all(c in compliance.columns for c in ["Closing_Stock_g", "Portion_Required", "Required_Qty"]):
+    _req   = compliance["Required_Qty"].replace(0, float("nan"))
+    _p_req = compliance["Portion_Required"]
+    # Qty_new (g per portion) = Required_Qty / Portion_Required
+    # Carry_Forward_Portions  = Closing_Stock_g / Qty_new
+    compliance["Carry_Forward_Portions"] = (
+        compliance["Closing_Stock_g"] * _p_req / _req
+    ).round(1)
 
 # ── Remap Status: Surplus/Exact → "Compliant", Deficit → "Non-Compliant" ──────
 if "Status" in compliance.columns:
@@ -493,17 +504,19 @@ with tab2:
         # ── Columns shown globally (change in code to update for all users) ──
         # Hidden: raw qty/UOM columns + Week_Commencing
         _HIDDEN_COLS = {"Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap",
-                        "Opening_Stock_g", "Week_Commencing"}
+                        "Opening_Stock_g", "Closing_Stock_g", "Week_Commencing"}
         _COL_RENAME  = {
-            "Portion_Required": "Portion_Required (Consumed)",
-            "Portion_Ordered":  "Portion_Ordered (Bidfood)",
-            "Closing_Stock_g":  "Carry Forward Stock (g)",
+            "Portion_Required":       "Portion_Required (Consumed)",
+            "Portion_Ordered":        "Portion_Ordered (Bidfood)",
+            "Portion_Gap":            "Portion_Gap",
+            "Carry_Forward_Portions": "Carry Forward (Portions)",
         }
         _all_possible = [c for c in
                          ["Week_Commencing", "Site_Key", "Store_Name", "SKU", "Ingredient",
                           "Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM",
                           "Opening_Stock_g", "Gap", "Closing_Stock_g",
-                          "Portion_Required", "Portion_Ordered", "Portion_Gap", "Status"]
+                          "Portion_Required", "Portion_Ordered", "Portion_Gap",
+                          "Carry_Forward_Portions", "Status"]
                          if c in _disp2.columns]
 
         # Display names for the toggle UI (same as _COL_RENAME where applicable)
