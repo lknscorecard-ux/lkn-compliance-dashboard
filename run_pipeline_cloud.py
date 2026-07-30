@@ -255,10 +255,22 @@ def main():
     # ── [3/6] Load Drop Account Mapping (live Google Sheet) ───────────────────
     log.info("[3/6] Loading Drop Account Mapping from Google Sheets ...")
     mapping_ws = gc.open_by_key(mapping_id).worksheet("Site Mapping")
-    mapping_df = pd.DataFrame(mapping_ws.get_all_records()).fillna("").astype(str)
+    _raw = mapping_ws.get_all_values()
+    mapping_df = (
+        pd.DataFrame(_raw[1:], columns=_raw[0]).fillna("").astype(str)
+        if _raw else pd.DataFrame()
+    )
+    mapping_df.columns = mapping_df.columns.str.strip()              # strip header whitespace
+    mapping_df = mapping_df.loc[:, ~mapping_df.columns.duplicated()]  # drop duplicate headers
     for col in mapping_df.select_dtypes("object").columns:
         mapping_df[col] = mapping_df[col].str.strip()
-    log.info("  Mapping: %d sites loaded", len(mapping_df))
+    # Filter to Required = YES sites only
+    if "Required" in mapping_df.columns:
+        _before = len(mapping_df)
+        mapping_df = mapping_df[mapping_df["Required"].str.upper() == "YES"].copy()
+        log.info("  Mapping: %d sites loaded (%d excluded — Required≠YES)", len(mapping_df), _before - len(mapping_df))
+    else:
+        log.info("  Mapping: %d sites loaded", len(mapping_df))
 
     # ── [3b] Seed "Stock on Hand" from previous week's Bidfood file (one-time) ──
     # Upload last week's processed_data renamed to include "stock_seed" in the
@@ -322,6 +334,16 @@ def main():
     site_stock, sku_summary, bf_lkn, bf_unmatched = engine_bidfood.run(bf_df, mapping_df)
     log.info("  Site stock: %d rows", len(site_stock))
 
+    # ── Filter to LKN food SKUs only ─────────────────────────────────────────
+    _LKN_FOOD_SKUS = {
+        "34188","30110","6583","06583","15661","18363",
+        "25788","26214","22667","22668","26222","26227","26229","29053","30003",
+    }
+    site_raw   = site_raw[site_raw["SKU"].astype(str).isin(_LKN_FOOD_SKUS)].copy()
+    site_stock = site_stock[site_stock["Product Code"].astype(str).isin(_LKN_FOOD_SKUS)].copy()
+    log.info("  After SKU filter — site_raw: %d rows | site_stock: %d rows",
+             len(site_raw), len(site_stock))
+
     log.info("         System C — compliance gap ...")
     # Build Store Name → Site Key lookup for req-only rows with no Bidfood match
     _store_site_map = dict(zip(
@@ -375,9 +397,10 @@ def main():
             )
             _valid = _qty_per.notna() & (_qty_per > 0)
             # Use .where() so non-mapped rows are NaN (fillna("") in _write_tab handles them)
-            compliance["Portion_Required"] = (compliance["Required_Qty"] / _qty_per).round(1).where(_valid)
-            compliance["Portion_Ordered"]  = (compliance["Ordered_Qty"]  / _qty_per).round(1).where(_valid)
-            compliance["Portion_Gap"]      = (compliance["Gap"]           / _qty_per).round(1).where(_valid)
+            compliance["Portion_Required"]       = (compliance["Required_Qty"]   / _qty_per).round(1).where(_valid)
+            compliance["Portion_Ordered"]        = (compliance["Ordered_Qty"]    / _qty_per).round(1).where(_valid)
+            compliance["Portion_Gap"]            = (compliance["Gap"]            / _qty_per).round(1).where(_valid)
+            compliance["Carry_Forward_Portions"] = (compliance["Closing_Stock_g"] / _qty_per).round(1).where(_valid)
             log.info("  Portion size: %.0f%% of rows mapped", _valid.mean() * 100)
     except Exception as _e:
         log.warning("  Portion size enrichment skipped: %s", _e)
@@ -385,7 +408,7 @@ def main():
     # ── Week commencing tag ───────────────────────────────────────────────────
     from datetime import timedelta
     _run_dt = datetime.now(timezone.utc)
-    _wc = (_run_dt - timedelta(days=_run_dt.weekday())).strftime("%Y-%m-%d")
+    _wc = (_run_dt - timedelta(days=_run_dt.weekday() + 7)).strftime("%Y-%m-%d")  # previous Monday
     compliance.insert(0, "Week_Commencing", _wc)
     site_summ.insert(0, "Week_Commencing", _wc)
 
@@ -408,19 +431,10 @@ def main():
     _append_history(gc, results_id, "Compliance History",    compliance)
     _append_history(gc, results_id, "Site Summary History",  site_summ)
 
-    # Packaging (optional)
+    # Packaging (Opalion) — disabled; calculated separately
     pkg_compliance  = pd.DataFrame()
     pkg_site_summ   = pd.DataFrame()
     pkg_sku_summary = pd.DataFrame()
-    if opalion_df is not None:
-        log.info("         Packaging — Opalion compliance ...")
-        site_packaging, pkg_sku_summary, opal_unmatched = engine_opalion.run(
-            opalion_df, mapping_df
-        )
-        pkg_compliance = engine_compliance.packaging_compliance(site_raw, site_packaging)
-        pkg_site_summ  = engine_compliance.packaging_site_summary(pkg_compliance)
-        log.info("  Packaging rows: %d | Unmatched companies: %d",
-                 len(pkg_compliance), len(opal_unmatched))
 
     # ── [6/6] Write results to Google Sheets ──────────────────────────────────
     log.info("[6/6] Writing results to Google Sheets ...")

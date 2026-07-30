@@ -37,6 +37,8 @@ st.markdown("""
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 RESULTS_SHEET_ID = os.environ.get("RESULTS_SHEET_ID", "")
+MAPPING_SHEET_ID = os.environ.get("MAPPING_SHEET_ID",
+                   st.secrets.get("MAPPING_SHEET_ID", "") if hasattr(st, "secrets") else "")
 PROJECT_ID = "compliance-501910"
 REGION     = "europe-west2"
 JOB_NAME   = "lkn-pipeline"
@@ -107,6 +109,30 @@ def _load_all_sheets() -> dict:
 def _safe(tab: str) -> pd.DataFrame:
     return _load_all_sheets().get(tab, pd.DataFrame())
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_required_sites() -> set:
+    """Return set of Site_Keys where Required = YES in the mapping sheet."""
+    try:
+        mid = (st.secrets.get("MAPPING_SHEET_ID") or
+               os.environ.get("MAPPING_SHEET_ID", ""))
+        if not mid:
+            return set()
+        gc  = _get_gc()
+        ws  = gc.open_by_key(mid).worksheet("Site Mapping")
+        raw = ws.get_all_values()
+        if not raw:
+            return set()
+        df  = pd.DataFrame(raw[1:], columns=raw[0])
+        df.columns = df.columns.str.strip()
+        df  = df.loc[:, ~df.columns.duplicated()]
+        for c in df.select_dtypes("object").columns:
+            df[c] = df[c].str.strip()
+        if "Required" not in df.columns or "Site Key" not in df.columns:
+            return set()
+        return set(df[df["Required"].str.upper() == "YES"]["Site Key"].tolist())
+    except Exception:
+        return set()
+
 def _to_csv(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8")
 
@@ -134,6 +160,15 @@ with st.spinner("Loading data from Google Sheets …"):
     ingredient_s = _safe("Ingredient Requirements")
     bidfood_s    = _safe("Bidfood Stock")
     run_log      = _safe("Run Log")
+
+# ── Filter to Required=YES sites (from mapping sheet) ─────────────────────────
+with st.spinner("Checking required sites…"):
+    _required_sites = _load_required_sites()
+if _required_sites:
+    if "Site_Key" in compliance.columns:
+        compliance = compliance[compliance["Site_Key"].isin(_required_sites)]
+    if "Site_Key" in site_summ.columns:
+        site_summ  = site_summ[site_summ["Site_Key"].isin(_required_sites)]
 
 if compliance.empty:
     st.info("No compliance data yet. Trigger the pipeline above.")
@@ -556,10 +591,11 @@ with tab2:
 
         _num_cols_1dp = [c for c in
                          ["Required_Qty", "Ordered_Qty", "Gap"] if c in _show_renamed]
-        _pr_col = _COL_RENAME.get("Portion_Required", "Portion_Required")
-        _po_col = _COL_RENAME.get("Portion_Ordered",  "Portion_Ordered")
+        _pr_col = _COL_RENAME.get("Portion_Required",       "Portion_Required")
+        _po_col = _COL_RENAME.get("Portion_Ordered",        "Portion_Ordered")
+        _cf_col = _COL_RENAME.get("Carry_Forward_Portions", "Carry Forward (Portions)")
         _num_cols_0dp = [c for c in
-                         [_pr_col, _po_col, "Portion_Gap"] if c in _show_renamed]
+                         [_pr_col, _po_col, "Portion_Gap", _cf_col] if c in _show_renamed]
         _detail_fmt = {c: "{:.1f}" for c in _num_cols_1dp}
         _detail_fmt.update({c: "{:.0f}" for c in _num_cols_0dp})
         _detail_styled = _disp2_show.style.format(_detail_fmt)
