@@ -438,34 +438,53 @@ with tab2:
     st.subheader("Site-level Compliance Detail")
 
     if not compliance.empty:
-        _f1, _f2, _f3, _f4 = st.columns(4)
+        _sku_col = "SKU" if "SKU" in compliance.columns else compliance.columns[2]
+
+        # Build combined SKU — Ingredient options (one label per unique SKU using first ingredient name)
+        _sku_ingr_map = (
+            compliance.dropna(subset=[_sku_col, "Ingredient"])
+            .astype({_sku_col: str, "Ingredient": str})
+            .groupby(_sku_col)["Ingredient"]
+            .first()
+            .to_dict()
+        )
+        # Use canonical names from SKU map where available
+        _sku_labels = sorted([
+            f"{sku} — {_SKU_NAME_MAP.get(sku, _sku_ingr_map.get(sku, sku))}"
+            for sku in _sku_ingr_map
+        ])
+        _label_to_sku = {lbl: lbl.split(" — ")[0] for lbl in _sku_labels}
+
+        _f1, _f2, _f3 = st.columns(3)
         with _f1:
-            _sites = (["All"]
-                      + sorted(compliance["Site_Key"].dropna().astype(str).unique().tolist()))
-            _sel_site = st.selectbox("Site", _sites, key="sites_site_filter")
-        with _f2:
-            _sel_status = st.selectbox("Status", ["All", "Compliant", "Non-Compliant"],
-                                       key="sites_status_filter")
-        with _f3:
-            _sku_col  = "SKU" if "SKU" in compliance.columns else compliance.columns[2]
-            _all_skus = sorted(compliance[_sku_col].dropna().astype(str).unique().tolist())
-            _sel_skus = st.multiselect("SKU", _all_skus,
-                                       placeholder="All SKUs",
-                                       key="sites_sku_filter")
-        with _f4:
-            _all_ingredients = (
-                sorted(compliance["Ingredient"].dropna().astype(str).unique().tolist())
-                if "Ingredient" in compliance.columns else []
+            _all_stores = sorted(
+                compliance["Store_Name"].dropna().astype(str).unique().tolist()
             )
-            _sel_ingredients = st.multiselect("Ingredient", _all_ingredients,
-                                              placeholder="All Ingredients",
-                                              key="sites_ingredient_filter")
+            _sel_stores = st.multiselect(
+                "Store", _all_stores,
+                placeholder="Type store name…",
+                key="sites_store_filter",
+            )
+        with _f2:
+            _sel_status = st.selectbox(
+                "Status", ["All", "Compliant", "Non-Compliant"],
+                key="sites_status_filter",
+            )
+        with _f3:
+            _sel_sku_ingr = st.multiselect(
+                "SKU / Ingredient", _sku_labels,
+                placeholder="Search by SKU or ingredient…",
+                key="sites_sku_ingredient_filter",
+            )
 
         _disp2 = compliance.copy()
-        if _sel_site        != "All": _disp2 = _disp2[_disp2["Site_Key"] == _sel_site]
-        if _sel_status      != "All": _disp2 = _disp2[_disp2["Status"]   == _sel_status]
-        if _sel_skus:                 _disp2 = _disp2[_disp2[_sku_col].astype(str).isin(_sel_skus)]
-        if _sel_ingredients:          _disp2 = _disp2[_disp2["Ingredient"].isin(_sel_ingredients)]
+        if _sel_stores:
+            _disp2 = _disp2[_disp2["Store_Name"].astype(str).isin(_sel_stores)]
+        if _sel_status != "All":
+            _disp2 = _disp2[_disp2["Status"] == _sel_status]
+        if _sel_sku_ingr:
+            _sel_skus = [_label_to_sku[l] for l in _sel_sku_ingr if l in _label_to_sku]
+            _disp2 = _disp2[_disp2[_sku_col].astype(str).isin(_sel_skus)]
 
         def _status_bg(val):
             _c = {"Compliant": "#E5F5E0", "Non-Compliant": "#FFE8E8"}
@@ -546,6 +565,7 @@ with tab2:
         )
 
         # ── When exactly one SKU is selected, show ingredient + bidfood detail ──
+        _sel_skus = [_label_to_sku[l] for l in _sel_sku_ingr if l in _label_to_sku]
         if len(_sel_skus) == 1:
             _sel_sku_single = _sel_skus[0]
             st.divider()
