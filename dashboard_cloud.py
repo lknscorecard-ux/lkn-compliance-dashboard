@@ -169,6 +169,8 @@ if _required_sites:
         compliance = compliance[compliance["Site_Key"].isin(_required_sites)]
     if "Site_Key" in site_summ.columns:
         site_summ  = site_summ[site_summ["Site_Key"].isin(_required_sites)]
+else:
+    st.warning(f"Required sites filter inactive — check MAPPING_SHEET_ID secret and 'Required' column in Site Mapping tab. (mid={st.secrets.get('MAPPING_SHEET_ID','NOT SET')})")
 
 if compliance.empty:
     st.info("No compliance data yet. Trigger the pipeline above.")
