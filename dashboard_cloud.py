@@ -150,7 +150,7 @@ with h1:
     if _logo:
         st.markdown(
             f'<div style="display:flex;align-items:center;gap:16px;">'
-            f'<img src="data:image/png;base64,{_logo}" style="height:70px;width:auto;">'
+            f'<img src="data:image/png;base64,{_logo}" style="height:70px;width:auto;border:2px solid black;padding:4px;">'
             f'<span style="font-size:1.8rem;font-weight:700;">LKN Compliance Dashboard</span>'
             f'</div>',
             unsafe_allow_html=True,
