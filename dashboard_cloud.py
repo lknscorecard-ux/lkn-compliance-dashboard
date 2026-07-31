@@ -482,7 +482,7 @@ _all_weeks = []
 if _wc_col_exists:
     _all_weeks = sorted(compliance["Week_Commencing"].dropna().unique().tolist(), reverse=True)
 
-if _wc_col_exists and len(_all_weeks) > 1:
+if _wc_col_exists and len(_all_weeks) >= 1:
     sel_week = st.selectbox(
         "Week commencing", _all_weeks,
         help="Filter all views to a specific week. Run the pipeline weekly to build history."
@@ -492,9 +492,6 @@ if _wc_col_exists and len(_all_weeks) > 1:
         site_summ = site_summ[site_summ["Week_Commencing"] == sel_week]
     if "Week_Commencing" in bidfood_s.columns:
         bidfood_s = bidfood_s[bidfood_s["Week_Commencing"] == sel_week]
-elif _wc_col_exists and len(_all_weeks) == 1:
-    sel_week = _all_weeks[0]
-    st.caption(f"Week commencing: **{_all_weeks[0]}**")
 
 st.divider()
 
