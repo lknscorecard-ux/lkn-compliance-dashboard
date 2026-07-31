@@ -487,11 +487,13 @@ if ("Portion_Gap" in compliance.columns
 HAS_PORTIONS = ("Portion_Gap" in compliance.columns
                 and pd.to_numeric(compliance["Portion_Gap"], errors="coerce").abs().sum() > 0)
 
-# ── Site ranking ───────────────────────────────────────────────────────────────
+# ── Site ranking — assigned AFTER required-sites filter so ranks are sequential ─
 if not site_summ.empty and "Compliance_%" in site_summ.columns:
     site_summ = (site_summ
                  .sort_values("Compliance_%", ascending=False)
                  .reset_index(drop=True))
+    if "Rank" in site_summ.columns:
+        site_summ = site_summ.drop(columns=["Rank"])
     site_summ.insert(0, "Rank", range(1, len(site_summ) + 1))
 
 # ── Last run banner ────────────────────────────────────────────────────────────
