@@ -76,27 +76,46 @@ def _load_all_sheets() -> dict:
     sh  = gc.open_by_key(sid)
     out = {}
 
-    def _read_tab(ws_name):
-        """Read a worksheet safely using get_all_values (no duplicate-header crash)."""
+    def _read_tab(ws_name, tail_rows=None):
+        """Read a worksheet safely. tail_rows=N reads only the last N data rows (+ header)."""
         try:
-            raw = sh.worksheet(ws_name).get_all_values()
+            ws  = sh.worksheet(ws_name)
+            if tail_rows:
+                # Read header + last N rows only — avoids loading huge history sheets
+                all_vals = ws.get_all_values()
+                if not all_vals or len(all_vals) < 2:
+                    return pd.DataFrame()
+                header = all_vals[0]
+                # Strip trailing blank rows before slicing
+                data = [r for r in all_vals[1:] if any(c.strip() for c in r)]
+                raw  = [header] + data[-tail_rows:]
+            else:
+                raw = ws.get_all_values()
             if not raw or len(raw) < 2:
                 return pd.DataFrame()
-            df = pd.DataFrame(raw[1:], columns=raw[0]).fillna("").astype(str)
+            # Strip trailing blank rows
+            data_rows = [r for r in raw[1:] if any(c.strip() for c in r)]
+            if not data_rows:
+                return pd.DataFrame()
+            df = pd.DataFrame(data_rows, columns=raw[0]).fillna("").astype(str)
             df.columns = df.columns.str.strip()
             df = df.loc[:, ~df.columns.duplicated()]
             return df
-        except Exception:
+        except Exception as _e:
+            out.setdefault("_load_errors", []).append(f"{ws_name}: {_e}")
             return pd.DataFrame()
 
-    # For compliance + site summary: prefer history tab (all weeks) over current tab
+    # History tabs: read last 3 weeks of rows only to avoid timeout on large sheets.
+    # Each week ≈ 100-150 sites × 16 SKUs ≈ 1,600 rows → 3 weeks = 5,000 rows max.
+    HISTORY_TAIL = 5000
+
     for hist_tab, cur_tab, out_key in [
         ("Compliance History",   "Compliance Gap", "Compliance Gap"),
         ("Site Summary History", "Site Summary",   "Site Summary"),
     ]:
         loaded = False
-        for tab_name in [hist_tab, cur_tab]:
-            df = _read_tab(tab_name)
+        for tab_name, tail in [(hist_tab, HISTORY_TAIL), (cur_tab, None)]:
+            df = _read_tab(tab_name, tail_rows=tail)
             if not df.empty:
                 out[out_key] = df
                 loaded = True
@@ -108,8 +127,8 @@ def _load_all_sheets() -> dict:
     for tab in ["Ingredient Requirements", "Run Log"]:
         out[tab] = _read_tab(tab)
         time.sleep(1)
-    # Bidfood Stock: prefer history (all weeks) over current tab
-    _bf_hist = _read_tab("Bidfood Stock History")
+    # Bidfood Stock: prefer history (last 3 weeks) over current tab
+    _bf_hist = _read_tab("Bidfood Stock History", tail_rows=HISTORY_TAIL)
     out["Bidfood Stock"] = _bf_hist if not _bf_hist.empty else _read_tab("Bidfood Stock")
     time.sleep(1)
     return out
@@ -181,23 +200,44 @@ with h3:
 
 # ── Load all data ──────────────────────────────────────────────────────────────
 with st.spinner("Loading data from Google Sheets …"):
-    compliance   = _safe("Compliance Gap")
-    site_summ    = _safe("Site Summary")
-    ingredient_s = _safe("Ingredient Requirements")
-    bidfood_s    = _safe("Bidfood Stock")
-    run_log      = _safe("Run Log")
+    _all_data    = _load_all_sheets()
+    compliance   = _all_data.get("Compliance Gap",          pd.DataFrame())
+    site_summ    = _all_data.get("Site Summary",            pd.DataFrame())
+    ingredient_s = _all_data.get("Ingredient Requirements", pd.DataFrame())
+    bidfood_s    = _all_data.get("Bidfood Stock",           pd.DataFrame())
+    run_log      = _all_data.get("Run Log",                 pd.DataFrame())
+    # Show any sheet-read errors for debugging
+    for _err in _all_data.get("_load_errors", []):
+        st.warning(f"⚠️ Sheet load error: {_err}")
+
+# ── Strip blank rows (Google Sheets trailing empty rows) ──────────────────────
+if "Site_Key" in compliance.columns:
+    compliance = compliance[compliance["Site_Key"].str.strip() != ""]
+if "SKU" in compliance.columns:
+    compliance = compliance[compliance["SKU"].str.strip() != ""]
+if "Site_Key" in site_summ.columns:
+    site_summ = site_summ[site_summ["Site_Key"].str.strip() != ""]
 
 # ── Filter to Required=YES sites (from mapping sheet) ─────────────────────────
 with st.spinner("Checking required sites…"):
     _required_sites = _load_required_sites()
 if _required_sites:
+    _before = len(compliance)
     if "Site_Key" in compliance.columns:
         compliance = compliance[compliance["Site_Key"].isin(_required_sites)]
     if "Site_Key" in site_summ.columns:
         site_summ  = site_summ[site_summ["Site_Key"].isin(_required_sites)]
+    # Safety: if filter wiped everything, fall back to unfiltered
+    if compliance.empty and _before > 0:
+        compliance = _safe("Compliance Gap")
+        if "Site_Key" in compliance.columns:
+            compliance = compliance[compliance["Site_Key"].str.strip() != ""]
+        if "SKU" in compliance.columns:
+            compliance = compliance[compliance["SKU"].str.strip() != ""]
+        st.warning("⚠️ Required Sites filter removed all data — showing unfiltered. Check Site Key values in mapping sheet.")
 
 if compliance.empty:
-    st.info("No compliance data yet. Trigger the pipeline above.")
+    st.info("No compliance data found. Run the pipeline to generate data.")
     st.stop()
 
 # ── Numeric coercion ───────────────────────────────────────────────────────────
