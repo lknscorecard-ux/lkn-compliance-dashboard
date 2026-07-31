@@ -166,27 +166,39 @@ def _safe(tab: str) -> pd.DataFrame:
     return _load_all_sheets().get(tab, pd.DataFrame())
 
 @st.cache_data(ttl=600, show_spinner=False)
-def _load_required_sites() -> set:
-    """Return set of Site_Keys where Required = YES in the mapping sheet."""
+def _load_site_mapping() -> pd.DataFrame:
+    """
+    Load the Site Mapping sheet and return a normalised DataFrame.
+    Columns of interest: Site Key, Required, Account Manager.
+    Returns empty DataFrame on failure.
+    """
     try:
         mid = MAPPING_SHEET_ID
         if not mid:
-            return set()
+            return pd.DataFrame()
         gc  = _get_gc()
         ws  = gc.open_by_key(mid).worksheet("Site Mapping")
         raw = ws.get_all_values()
-        if not raw:
-            return set()
+        if not raw or len(raw) < 2:
+            return pd.DataFrame()
         df  = pd.DataFrame(raw[1:], columns=raw[0])
         df.columns = df.columns.str.strip()
         df  = df.loc[:, ~df.columns.duplicated()]
         for c in df.select_dtypes("object").columns:
             df[c] = df[c].str.strip()
-        if "Required" not in df.columns or "Site Key" not in df.columns:
-            return set()
-        return set(df[df["Required"].str.upper() == "YES"]["Site Key"].tolist())
+        # Normalise Site Key column name (might be "Site Key" or "Site_Key")
+        if "Site_Key" in df.columns and "Site Key" not in df.columns:
+            df = df.rename(columns={"Site_Key": "Site Key"})
+        return df
     except Exception:
+        return pd.DataFrame()
+
+def _load_required_sites() -> set:
+    """Return set of Site_Keys where Required = YES in the mapping sheet."""
+    df = _load_site_mapping()
+    if df.empty or "Required" not in df.columns or "Site Key" not in df.columns:
         return set()
+    return set(df[df["Required"].str.upper() == "YES"]["Site Key"].tolist())
 
 def _to_csv(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8")
@@ -247,9 +259,19 @@ if "SKU" in compliance.columns:
 if "Site_Key" in site_summ.columns:
     site_summ = site_summ[site_summ["Site_Key"].str.strip() != ""]
 
-# ── Filter to Required=YES sites (from mapping sheet) ─────────────────────────
+# ── Load mapping sheet (required sites + account managers) ────────────────────
 with st.spinner("Checking required sites…"):
+    _site_mapping   = _load_site_mapping()
     _required_sites = _load_required_sites()
+
+# Build Site_Key → Account Manager lookup
+_site_key_to_manager: dict = {}
+if not _site_mapping.empty and "Site Key" in _site_mapping.columns and "Account Manager" in _site_mapping.columns:
+    _site_key_to_manager = (
+        _site_mapping.set_index("Site Key")["Account Manager"]
+        .replace("", pd.NA).dropna()
+        .to_dict()
+    )
 if _required_sites:
     _before = len(compliance)
     if "Site_Key" in compliance.columns:
@@ -660,8 +682,28 @@ with tab2:
         ])
         _label_to_sku = {lbl: lbl.split(" — ")[0] for lbl in _sku_labels}
 
-        _f1, _f2, _f3 = st.columns(3)
-        with _f1:
+        # Account Manager filter — built from mapping sheet
+        _acct_mgr_col_exists = bool(_site_key_to_manager)
+        if _acct_mgr_col_exists:
+            # Map Site_Key → Account Manager for every row in compliance
+            _compliance_mgr = compliance["Site_Key"].astype(str).map(_site_key_to_manager).fillna("Unassigned")
+            _all_managers = sorted(_compliance_mgr.dropna().unique().tolist())
+        else:
+            _compliance_mgr = pd.Series(["Unassigned"] * len(compliance), index=compliance.index)
+            _all_managers = []
+
+        _frow1_cols = st.columns(4) if _acct_mgr_col_exists else st.columns(3)
+        with _frow1_cols[0]:
+            if _acct_mgr_col_exists:
+                _sel_managers = st.multiselect(
+                    "Account Manager", _all_managers,
+                    placeholder="Filter by account manager…",
+                    key="sites_manager_filter",
+                )
+            else:
+                _sel_managers = []
+
+        with _frow1_cols[1 if _acct_mgr_col_exists else 0]:
             _all_stores = sorted(
                 compliance["Store_Name"].dropna().astype(str).unique().tolist()
             )
@@ -670,12 +712,12 @@ with tab2:
                 placeholder="Type store name…",
                 key="sites_store_filter",
             )
-        with _f2:
+        with _frow1_cols[2 if _acct_mgr_col_exists else 1]:
             _sel_status = st.selectbox(
                 "Status", ["All", "Compliant", "Non-Compliant"],
                 key="sites_status_filter",
             )
-        with _f3:
+        with _frow1_cols[3 if _acct_mgr_col_exists else 2]:
             _sel_sku_ingr = st.multiselect(
                 "SKU / Ingredient", _sku_labels,
                 placeholder="Search by SKU or ingredient…",
@@ -683,6 +725,9 @@ with tab2:
             )
 
         _disp2 = compliance.copy()
+        if _sel_managers:
+            _mgr_sites = {sk for sk, mgr in _site_key_to_manager.items() if mgr in _sel_managers}
+            _disp2 = _disp2[_disp2["Site_Key"].astype(str).isin(_mgr_sites)]
         if _sel_stores:
             _disp2 = _disp2[_disp2["Store_Name"].astype(str).isin(_sel_stores)]
         if _sel_status != "All":
