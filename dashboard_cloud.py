@@ -101,6 +101,8 @@ def _load_all_sheets() -> dict:
             df.columns = df.columns.str.strip()
             df = df.loc[:, ~df.columns.duplicated()]
             return df
+        except gspread.exceptions.WorksheetNotFound:
+            return pd.DataFrame()   # tab not yet created — silent
         except Exception as _e:
             out.setdefault("_load_errors", []).append(f"{ws_name}: {_e}")
             return pd.DataFrame()
