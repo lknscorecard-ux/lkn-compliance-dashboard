@@ -401,8 +401,8 @@ st.divider()
 
 # ── KPI Row ────────────────────────────────────────────────────────────────────
 _total_sites     = site_summ.shape[0] if not site_summ.empty else 0
-# Site is Compliant if Compliance % >= 90
-_compliant_sites = int((site_summ["Compliance_%"] >= 90).sum()) if not site_summ.empty else 0
+# Site is Compliant if Compliance % >= 70
+_compliant_sites = int((site_summ["Compliance_%"] >= 70).sum()) if not site_summ.empty else 0
 _noncomp_sites   = _total_sites - _compliant_sites
 _avg_comp        = round(site_summ["Compliance_%"].mean(), 1) if not site_summ.empty else 0
 # Bidfood spend — filter to required sites (already filtered) for selected W/C
@@ -438,8 +438,8 @@ with tab1:
     with c_donut:
         st.subheader("Site Compliance")
         if not site_summ.empty:
-            n_comp    = int((site_summ["Compliance_%"] >= 90).sum())
-            n_noncomp = int((site_summ["Compliance_%"] < 90).sum())
+            n_comp    = int((site_summ["Compliance_%"] >= 70).sum())
+            n_noncomp = int((site_summ["Compliance_%"] < 70).sum())
             _fig_donut = go.Figure(go.Pie(
                 labels=["Compliant", "Non-Compliant"],
                 values=[n_comp, n_noncomp],
