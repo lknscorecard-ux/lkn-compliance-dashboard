@@ -703,12 +703,19 @@ with tab2:
             else:
                 _sel_managers = []
 
-        with _frow1_cols[1 if _acct_mgr_col_exists else 0]:
-            _all_stores = sorted(
-                compliance["Store_Name"].dropna().astype(str).unique().tolist()
+        # Scope Store dropdown to selected manager's sites only
+        if _sel_managers:
+            _mgr_sites_for_store = {sk for sk, mgr in _site_key_to_manager.items() if mgr in _sel_managers}
+            _stores_for_mgr = sorted(
+                compliance[compliance["Site_Key"].astype(str).isin(_mgr_sites_for_store)]
+                ["Store_Name"].dropna().astype(str).unique().tolist()
             )
+        else:
+            _stores_for_mgr = sorted(compliance["Store_Name"].dropna().astype(str).unique().tolist())
+
+        with _frow1_cols[1 if _acct_mgr_col_exists else 0]:
             _sel_stores = st.multiselect(
-                "Store", _all_stores,
+                "Store", _stores_for_mgr,
                 placeholder="Type store name…",
                 key="sites_store_filter",
             )
@@ -736,46 +743,42 @@ with tab2:
             _sel_skus = [_label_to_sku[l] for l in _sel_sku_ingr if l in _label_to_sku]
             _disp2 = _disp2[_disp2[_sku_col].astype(str).isin(_sel_skus)]
 
-        # ── Site-level KPIs for the current filter selection ─────────────────
-        # Filter site_summ to the sites visible in _disp2 (Account Manager + Store filter)
-        # Status / SKU filters are row-level so don't affect site-level KPIs.
-        _filtered_site_keys = _disp2["Site_Key"].astype(str).unique() if "Site_Key" in _disp2.columns else []
-        _ss_filtered = (
-            site_summ[site_summ["Site_Key"].astype(str).isin(_filtered_site_keys)].copy()
-            if not site_summ.empty and len(_filtered_site_keys) > 0
-            else site_summ.copy()
-        )
-        _f_total   = _ss_filtered.shape[0]
-        _f_comp    = int((_ss_filtered["Compliance_%"] >= 70).sum()) if not _ss_filtered.empty else 0
-        _f_noncomp = _f_total - _f_comp
-        _f_avg     = round(_ss_filtered["Compliance_%"].mean(), 1) if not _ss_filtered.empty else 0
-        # Bidfood spend for these sites
-        _f_bf = bidfood_s.copy() if not bidfood_s.empty else pd.DataFrame()
-        if not _f_bf.empty and "Site_Key" in _f_bf.columns and len(_filtered_site_keys) > 0:
-            _f_bf = _f_bf[_f_bf["Site_Key"].astype(str).isin(_filtered_site_keys)]
-        _f_spend = (
-            pd.to_numeric(_f_bf["Total_Spend_GBP"], errors="coerce").sum()
-            if not _f_bf.empty and "Total_Spend_GBP" in _f_bf.columns else 0
-        )
-        # Only show this panel when an account manager (or store) is actively filtered
+        # ── Site-level KPIs — only shown when a filter is active ──────────────
         _is_filtered = bool(_sel_managers or _sel_stores)
-        _panel_label = (
-            f"Account Manager: {', '.join(_sel_managers)}" if _sel_managers
-            else f"Store filter active" if _sel_stores
-            else "All sites"
-        )
-        st.divider()
-        st.caption(f"📊 KPIs for: **{_panel_label}**")
-        _mk1, _mk2, _mk3, _mk4, _mk5 = st.columns(5)
-        _mk1.metric("Sites",            _f_total)
-        _mk2.metric("Avg Compliance",   f"{_f_avg:.1f}%")
-        _mk3.metric("Compliant (≥70%)", _f_comp,
-                    delta=f"{_f_comp} of {_f_total}", delta_color="normal")
-        _mk4.metric("Non-Compliant",    _f_noncomp,
-                    delta=f"{_f_noncomp} need attention" if _f_noncomp else "All clear",
-                    delta_color="inverse" if _f_noncomp else "off")
-        _mk5.metric("Bidfood Spend",    f"£{_f_spend:,.0f}")
-        st.divider()
+        if _is_filtered:
+            _filtered_site_keys = _disp2["Site_Key"].astype(str).unique() if "Site_Key" in _disp2.columns else []
+            _ss_filtered = (
+                site_summ[site_summ["Site_Key"].astype(str).isin(_filtered_site_keys)].copy()
+                if not site_summ.empty and len(_filtered_site_keys) > 0
+                else pd.DataFrame()
+            )
+            _f_total   = _ss_filtered.shape[0]
+            _f_comp    = int((_ss_filtered["Compliance_%"] >= 70).sum()) if not _ss_filtered.empty else 0
+            _f_noncomp = _f_total - _f_comp
+            _f_avg     = round(_ss_filtered["Compliance_%"].mean(), 1) if not _ss_filtered.empty else 0
+            _f_bf = bidfood_s.copy() if not bidfood_s.empty else pd.DataFrame()
+            if not _f_bf.empty and "Site_Key" in _f_bf.columns and len(_filtered_site_keys) > 0:
+                _f_bf = _f_bf[_f_bf["Site_Key"].astype(str).isin(_filtered_site_keys)]
+            _f_spend = (
+                pd.to_numeric(_f_bf["Total_Spend_GBP"], errors="coerce").sum()
+                if not _f_bf.empty and "Total_Spend_GBP" in _f_bf.columns else 0
+            )
+            _panel_label = (
+                f"Account Manager: {', '.join(_sel_managers)}" if _sel_managers
+                else "Store filter active"
+            )
+            st.divider()
+            st.caption(f"📊 KPIs for: **{_panel_label}**")
+            _mk1, _mk2, _mk3, _mk4, _mk5 = st.columns(5)
+            _mk1.metric("Sites",            _f_total)
+            _mk2.metric("Avg Compliance",   f"{_f_avg:.1f}%")
+            _mk3.metric("Compliant (≥70%)", _f_comp,
+                        delta=f"{_f_comp} of {_f_total}", delta_color="normal")
+            _mk4.metric("Non-Compliant",    _f_noncomp,
+                        delta=f"{_f_noncomp} need attention" if _f_noncomp else "All clear",
+                        delta_color="inverse" if _f_noncomp else "off")
+            _mk5.metric("Bidfood Spend",    f"£{_f_spend:,.0f}")
+            st.divider()
 
         def _status_bg(val):
             _c = {"Compliant": "#E5F5E0", "Non-Compliant": "#FFE8E8"}
