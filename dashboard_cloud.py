@@ -785,17 +785,22 @@ with tab2:
         _HIDDEN_COLS = {"Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap",
                         "Opening_Stock_g", "Closing_Stock_g", "Week_Commencing"}
         _COL_RENAME  = {
-            "Portion_Required":       "Portions Used",
-            "Portion_Ordered":        "Portions Ordered",
-            "Portion_Gap":            "Ordered vs Used (Variance)",
-            "Carry_Forward_Portions": "Stock Carried Forward",
+            "Portion_Required":       "Portions Used (Units)",
+            "Portion_Ordered":        "Portions Ordered (Units)",
+            "Portion_Gap":            "Ordered vs Used (Variance) (Units)",
+            "Carry_Forward_Portions": "Stock Carried Forward (Units)",
+            "Cases_Required":         "Portions Used (Cases)",
+            "Cases_Ordered":          "Portions Ordered (Cases)",
+            "Cases_Gap":              "Ordered vs Used (Variance) (Cases)",
             "Status":                 "Compliance Status",
         }
         _all_possible = [c for c in
                          ["Week_Commencing", "Site_Key", "Store_Name", "SKU", "Ingredient",
                           "Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM",
                           "Opening_Stock_g", "Gap", "Closing_Stock_g",
-                          "Portion_Required", "Portion_Ordered", "Portion_Gap",
+                          "Portion_Required", "Cases_Required",
+                          "Portion_Ordered",  "Cases_Ordered",
+                          "Portion_Gap",      "Cases_Gap",
                           "Carry_Forward_Portions", "Status"]
                          if c in _disp2.columns]
 
@@ -846,26 +851,31 @@ with tab2:
 
         _num_cols_1dp = [c for c in
                          ["Required_Qty", "Ordered_Qty", "Gap"] if c in _show_renamed]
-        _pr_col = _COL_RENAME.get("Portion_Required",       "Portions Used")
-        _po_col = _COL_RENAME.get("Portion_Ordered",        "Portions Ordered")
-        _pg_col = _COL_RENAME.get("Portion_Gap",            "Ordered vs Used (Variance)")
-        _cf_col = _COL_RENAME.get("Carry_Forward_Portions", "Stock Carried Forward")
-        _num_cols_0dp = [c for c in
-                         [_pr_col, _po_col, _pg_col, _cf_col] if c in _show_renamed]
+        # Units columns → 0 dp; Cases columns → 2 dp
+        _unit_cols = [_COL_RENAME.get(c, c) for c in
+                      ["Portion_Required", "Portion_Ordered", "Portion_Gap", "Carry_Forward_Portions"]]
+        _case_cols = [_COL_RENAME.get(c, c) for c in
+                      ["Cases_Required", "Cases_Ordered", "Cases_Gap"]]
+        _num_cols_0dp = [c for c in _unit_cols if c in _show_renamed]
+        _num_cols_2dp = [c for c in _case_cols if c in _show_renamed]
         _detail_fmt = {c: "{:.1f}" for c in _num_cols_1dp}
         _detail_fmt.update({c: "{:.0f}" for c in _num_cols_0dp})
-        _detail_styled = _disp2_show.style.format(_detail_fmt)
+        _detail_fmt.update({c: "{:.2f}" for c in _num_cols_2dp})
+        _detail_styled = _disp2_show.style.format(_detail_fmt, na_rep="—")
         _status_disp = _COL_RENAME.get("Status", "Status") if "Status" in _show_cols else None
         if _status_disp and _status_disp in _disp2_show.columns:
             _detail_styled = _detail_styled.map(_status_bg, subset=[_status_disp])
         _col_help = {
-            "SKU":                        "Unique product code assigned by Bidfood for this ingredient.",
-            "Ingredient":                 "Ingredient/product name as listed in the recipe or menu spec.",
-            "Portions Used":              "Number of portions consumed at this site, based on sales/recipe data, for the selected period.",
-            "Portions Ordered":           "Number of portions ordered from Bidfood for this ingredient in the selected period.",
-            "Ordered vs Used (Variance)": "Ordered minus Used. Positive = more ordered than consumed (surplus). Negative = ordered less than consumed (shortfall).",
-            "Stock Carried Forward":      "Portions remaining in stock, carried over from previous period(s) after accounting for usage and new orders.",
-            "Compliance Status":          "Compliant = ordering matches or exceeds usage needs. Non-Compliant = shortfall detected (negative variance with no carried-forward stock to cover it).",
+            "SKU":                                    "Unique product code assigned by Bidfood for this ingredient.",
+            "Ingredient":                             "Ingredient/product name as listed in the recipe or menu spec.",
+            "Portions Used (Units)":                  "Number of portions consumed at this site based on sales/recipe data.",
+            "Portions Ordered (Units)":               "Number of portions ordered from Bidfood for this ingredient.",
+            "Ordered vs Used (Variance) (Units)":     "Ordered minus Used in portions. Positive = surplus, Negative = shortfall.",
+            "Stock Carried Forward (Units)":          "Portions remaining in stock carried over from the previous period.",
+            "Portions Used (Cases)":                  "Portions used expressed as cases (packs) — Units ÷ pack size.",
+            "Portions Ordered (Cases)":               "Portions ordered expressed as cases (packs) — Units ÷ pack size.",
+            "Ordered vs Used (Variance) (Cases)":     "Variance expressed as cases. Positive = surplus cases, Negative = shortfall cases.",
+            "Compliance Status":                      "Compliant = ordering meets or exceeds usage. Non-Compliant = shortfall with no carried-forward stock to cover it.",
         }
         _col_config = {
             col: st.column_config.TextColumn(col, help=tip)

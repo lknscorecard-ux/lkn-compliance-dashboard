@@ -423,6 +423,31 @@ def main():
     except Exception as _e:
         log.warning("  Portion size enrichment skipped: %s", _e)
 
+    # ── Case enrichment ───────────────────────────────────────────────────────
+    # Cases = Qty_g / Pack_Qty_g  (Pack_Qty from Bidfood site_stock, g per case)
+    try:
+        if "Pack_Qty" in site_stock.columns:
+            _pk_map = (
+                site_stock.dropna(subset=["Pack_Qty"])
+                .groupby(["Site_Key", "Product Code"])["Pack_Qty"]
+                .first()
+            )
+            _keys  = list(zip(
+                compliance["Site_Key"].astype(str).str.strip(),
+                compliance["SKU"].astype(str).str.strip(),
+            ))
+            _pk = pd.to_numeric(
+                pd.Series([_pk_map.get(k, float("nan")) for k in _keys], index=compliance.index),
+                errors="coerce",
+            )
+            _valid_pk = _pk.notna() & (_pk > 0)
+            compliance["Cases_Required"] = (compliance["Required_Qty"] / _pk).round(2).where(_valid_pk)
+            compliance["Cases_Ordered"]  = (compliance["Ordered_Qty"]  / _pk).round(2).where(_valid_pk)
+            compliance["Cases_Gap"]      = (compliance["Gap"]          / _pk).round(2).where(_valid_pk)
+            log.info("  Case enrichment: %.0f%% of rows mapped", _valid_pk.mean() * 100)
+    except Exception as _e:
+        log.warning("  Case enrichment skipped: %s", _e)
+
     # ── Week commencing tag ───────────────────────────────────────────────────
     from datetime import timedelta
     _run_dt = datetime.now(timezone.utc)
