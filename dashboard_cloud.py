@@ -56,23 +56,28 @@ def _get_creds():
 def _get_gc():
     return gspread.authorize(_get_creds())
 
+def _set_wc_override(wc_date: str):
+    """Write the chosen W/C date to the 'Pipeline Config' tab so the pipeline picks it up."""
+    sid = (st.secrets.get("RESULTS_SHEET_ID") or os.environ.get("RESULTS_SHEET_ID", RESULTS_SHEET_ID))
+    gc  = _get_gc()
+    sh  = gc.open_by_key(sid)
+    try:
+        ws = sh.worksheet("Pipeline Config")
+        ws.clear()
+    except Exception:
+        ws = sh.add_worksheet("Pipeline Config", rows=5, cols=2)
+    ws.update([["key", "value"], ["WC_OVERRIDE", wc_date]])
+
 def _trigger_pipeline(wc_override: str = ""):
-    """Trigger the Cloud Run pipeline job, optionally overriding the Week_Commencing date."""
+    """Write W/C override to sheet, then trigger the Cloud Run job normally."""
+    if wc_override:
+        _set_wc_override(wc_override)
     import google.auth.transport.requests, requests as _req
     creds = _get_creds()
     creds.refresh(google.auth.transport.requests.Request())
     url  = (f"https://{REGION}-run.googleapis.com/apis/run.googleapis.com/v1"
             f"/namespaces/{PROJECT_ID}/jobs/{JOB_NAME}:run")
-    body = {}
-    if wc_override:
-        body = {
-            "overrides": {
-                "containerOverrides": [{
-                    "env": [{"name": "WC_OVERRIDE", "value": wc_override}]
-                }]
-            }
-        }
-    resp = _req.post(url, json=body, headers={"Authorization": f"Bearer {creds.token}"})
+    resp = _req.post(url, headers={"Authorization": f"Bearer {creds.token}"})
     if not resp.ok:
         raise RuntimeError(resp.text)
 

@@ -520,14 +520,23 @@ def main():
         log.warning("  Case enrichment skipped: %s", _e)
 
     # ── Week commencing tag ───────────────────────────────────────────────────
-    # Prefer WC_OVERRIDE env var (set by dashboard date picker) so the user
-    # never needs to manually edit the sheet.  Falls back to previous Monday.
+    # Read WC_OVERRIDE from 'Pipeline Config' sheet (written by dashboard date picker).
+    # Falls back to previous Monday if not set.
     from datetime import timedelta
     _run_dt = datetime.now(timezone.utc)
-    _wc = os.environ.get("WC_OVERRIDE", "").strip()
-    if _wc:
-        log.info("  Week commencing from WC_OVERRIDE: %s", _wc)
-    else:
+    _wc = ""
+    try:
+        _cfg_ws  = gc.open_by_key(results_id).worksheet("Pipeline Config")
+        _cfg_rows = _cfg_ws.get_all_values()
+        _cfg = {r[0]: r[1] for r in _cfg_rows[1:] if len(r) >= 2}
+        _wc  = _cfg.get("WC_OVERRIDE", "").strip()
+        if _wc:
+            log.info("  Week commencing from Pipeline Config sheet: %s", _wc)
+            # Clear the override so next run doesn't reuse it
+            _cfg_ws.clear()
+    except Exception as _cfg_err:
+        log.info("  Pipeline Config not found or unreadable (%s) — using auto date", _cfg_err)
+    if not _wc:
         _wc = (_run_dt - timedelta(days=_run_dt.weekday() + 7)).strftime("%Y-%m-%d")
         log.info("  Week commencing (auto): %s", _wc)
     compliance.insert(0, "Week_Commencing", _wc)
