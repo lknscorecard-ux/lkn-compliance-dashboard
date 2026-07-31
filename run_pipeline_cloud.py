@@ -388,6 +388,18 @@ def main():
     exact   = int((compliance["Status"] == "Exact").sum())
     log.info("  Surplus %d | Deficit %d | Exact %d", surplus, deficit, exact)
 
+    # ── Per-SKU compliance tolerance (portions) ───────────────────────────────
+    # If Gap >= -(tolerance_portions × Qty_new_g), treat as Compliant even if
+    # slightly short. Carry-forward stock is already included in Gap.
+    _TOLERANCE_PORTIONS = {
+        "34188": 1, "30110": 1, "6583":  1, "06583": 1,
+        "15661": 1, "18363": 1, "25788": 1,
+        "26364": 1, "17339": 1,
+        "26214": 2,
+        "22667": 2, "22668": 2, "26222": 2, "26227": 2,
+        "26229": 2, "29053": 2, "30003": 2,
+    }
+
     # ── Portion size enrichment ───────────────────────────────────────────────
     # Divide Required_Qty / Ordered_Qty / Gap by Qty_new (g per portion) from
     # Recipe Builder, matched by SKU, to express compliance in portions.
@@ -420,6 +432,24 @@ def main():
             compliance["Portion_Gap"]            = (compliance["Gap"]            / _qty_per).round(1).where(_valid)
             compliance["Carry_Forward_Portions"] = (compliance["Closing_Stock_g"] / _qty_per).round(1).where(_valid)
             log.info("  Portion size: %.0f%% of rows mapped", _valid.mean() * 100)
+
+            # ── Apply per-SKU tolerance ───────────────────────────────────────
+            # Tolerance in grams = tolerance_portions × Qty_new_g per SKU
+            _tol_por = (
+                compliance["SKU"].astype(str).str.strip()
+                .map(_TOLERANCE_PORTIONS).fillna(0)
+            )
+            _tol_g = (_tol_por * _qty_per.fillna(0)).fillna(0)
+            _gap   = compliance["Gap"]
+            compliance["Status"] = [
+                "Surplus" if g > 0
+                else ("Exact"   if g >= -t   # within tolerance → treat as compliant
+                else  "Deficit")
+                for g, t in zip(_gap, _tol_g)
+            ]
+            n_rescued = int((_tol_g > 0).sum() and
+                            (compliance["Status"] == "Exact").sum())
+            log.info("  Tolerance applied — %d rows re-evaluated", n_rescued)
     except Exception as _e:
         log.warning("  Portion size enrichment skipped: %s", _e)
 
