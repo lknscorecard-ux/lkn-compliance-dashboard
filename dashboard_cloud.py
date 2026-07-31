@@ -375,23 +375,28 @@ with tab1:
             )
 
             # Per-SKU per-site status (one pass, used by both charts)
-            _sku_site = (
+            _sku_site_raw = (
                 _food.groupby(["Display_Name", "Site_Key"])["Status"]
                 .apply(lambda s: "Non-Compliant" if (s == "Non-Compliant").any() else "Compliant")
                 .reset_index()
-                .rename(columns={"Status": "Site_Status"})
             )
+            # pandas 2.x+ may keep or rename the value column — normalise it
+            _ss_val = [c for c in _sku_site_raw.columns if c not in ("Display_Name", "Site_Key")][0]
+            _sku_site = _sku_site_raw.rename(columns={_ss_val: "Site_Status"})
 
-            def _pct_sites(grp, label):
-                return (
-                    _sku_site.groupby("Display_Name")
-                    .apply(lambda x: round((x["Site_Status"] == label).sum() / len(x) * 100, 1))
+            def _pct_sites(label):
+                # pandas 2.x+ returns series name not 0 after groupby apply
+                _res = (
+                    _sku_site.groupby("Display_Name")["Site_Status"]
+                    .apply(lambda x: round((x == label).sum() / len(x) * 100, 1))
                     .reset_index()
-                    .rename(columns={0: "Pct"})
                 )
+                # rename whatever the value column is called → "Pct"
+                _val_col = [c for c in _res.columns if c != "Display_Name"][0]
+                return _res.rename(columns={_val_col: "Pct"})
 
-            _nc_grp   = _pct_sites(_sku_site, "Non-Compliant")
-            _comp_grp = _pct_sites(_sku_site, "Compliant")
+            _nc_grp   = _pct_sites("Non-Compliant")
+            _comp_grp = _pct_sites("Compliant")
             _nc5   = _nc_grp.nlargest(5, "Pct").sort_values("Pct", ascending=True)
             _comp5 = _comp_grp.nlargest(5, "Pct").sort_values("Pct", ascending=True)
 
