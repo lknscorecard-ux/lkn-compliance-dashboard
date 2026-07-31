@@ -136,22 +136,54 @@ def _load_all_sheets() -> dict:
         n_valid = (df["Site_Key"].astype(str).str.strip() != "").sum()
         return n_valid >= max(1, len(df) * 0.5)
 
-    # Try current tab first (most reliable), then fall back to history.
-    # History tab is tried only if current is empty or has blank Site_Keys.
-    for cur_tab, hist_tab, out_key in [
-        ("Compliance Gap", "Compliance History",   "Compliance Gap"),
-        ("Site Summary",   "Site Summary History", "Site Summary"),
-    ]:
-        loaded = False
-        for tab_name, tail in [(cur_tab, None), (hist_tab, HISTORY_TAIL)]:
-            df = _read_tab(tab_name, tail_rows=tail)
-            if not df.empty and _has_valid_site_keys(df):
-                out[out_key] = df
-                loaded = True
-                time.sleep(1)
-                break
-        if not loaded:
-            out[out_key] = pd.DataFrame()
+    # Compliance Gap: combine current + history so all weeks appear in the W/C filter.
+    # Current tab has the latest week; History tab has prior weeks.
+    # Deduplicate on (Site_Key, SKU, Week_Commencing) keeping the current-tab row.
+    _comp_cur  = _read_tab("Compliance Gap")
+    time.sleep(1)
+    _comp_hist = _read_tab("Compliance History", tail_rows=HISTORY_TAIL)
+    time.sleep(1)
+    if _comp_cur.empty and _comp_hist.empty:
+        out["Compliance Gap"] = pd.DataFrame()
+    elif _comp_cur.empty:
+        out["Compliance Gap"] = _comp_hist if _has_valid_site_keys(_comp_hist) else pd.DataFrame()
+    elif _comp_hist.empty or not _has_valid_site_keys(_comp_hist):
+        out["Compliance Gap"] = _comp_cur
+    else:
+        # Keep history rows whose Week_Commencing is NOT in the current tab
+        _cur_wks  = set(_comp_cur.get("Week_Commencing", pd.Series()).dropna().unique())
+        _hist_old = (
+            _comp_hist[~_comp_hist.get("Week_Commencing", pd.Series(dtype=str))
+                       .isin(_cur_wks)]
+            if "Week_Commencing" in _comp_hist.columns
+            else pd.DataFrame()
+        )
+        _hist_old = _hist_old[_has_valid_site_keys(_hist_old)] if not _hist_old.empty else _hist_old
+        out["Compliance Gap"] = (
+            pd.concat([_comp_cur, _hist_old], ignore_index=True)
+            if not _hist_old.empty else _comp_cur
+        )
+
+    # Site Summary: same combine logic
+    _ss_cur  = _read_tab("Site Summary")
+    time.sleep(1)
+    _ss_hist = _read_tab("Site Summary History", tail_rows=HISTORY_TAIL)
+    time.sleep(1)
+    if _ss_cur.empty:
+        out["Site Summary"] = _ss_hist
+    elif _ss_hist.empty:
+        out["Site Summary"] = _ss_cur
+    else:
+        _cur_ss_wks  = set(_ss_cur.get("Week_Commencing", pd.Series()).dropna().unique())
+        _hist_ss_old = (
+            _ss_hist[~_ss_hist.get("Week_Commencing", pd.Series(dtype=str)).isin(_cur_ss_wks)]
+            if "Week_Commencing" in _ss_hist.columns
+            else pd.DataFrame()
+        )
+        out["Site Summary"] = (
+            pd.concat([_ss_cur, _hist_ss_old], ignore_index=True)
+            if not _hist_ss_old.empty else _ss_cur
+        )
 
     for tab in ["Ingredient Requirements", "Run Log"]:
         out[tab] = _read_tab(tab)
