@@ -185,14 +185,25 @@ def run(
     return compliance[cols].sort_values(["Site_Key","SKU"]).reset_index(drop=True)
 
 
-TOTAL_TRACKED_SKUS = 16  # fixed denominator for compliance %
+TOTAL_TRACKED_SKUS = 16  # fallback denominator if no recipe requirements found
 
 def site_summary(compliance: pd.DataFrame) -> pd.DataFrame:
     """
     Summarise compliance at site level.
-    Compliance % = Compliant SKUs / 14 (total tracked SKUs).
-    Missing SKUs for a site implicitly count as non-compliant.
+    Compliance % = Compliant SKUs / Required SKUs * 100
+    Required SKUs = distinct SKUs with Required_Qty > 0 at this site
+    (falls back to TOTAL_TRACKED_SKUS if none found).
     """
+    # Count required SKUs per site (SKUs the site actually has recipes for)
+    _rq = pd.to_numeric(compliance.get("Required_Qty", 0), errors="coerce").fillna(0)
+    _req_per_site = (
+        compliance[_rq > 0]
+        .groupby(["Site_Key", "Store_Name"])["SKU"]
+        .nunique()
+        .reset_index()
+        .rename(columns={"SKU": "Required_SKUs"})
+    )
+
     grp = (
         compliance
         .groupby(["Site_Key","Store_Name","Status"])
@@ -210,9 +221,13 @@ def site_summary(compliance: pd.DataFrame) -> pd.DataFrame:
     for col in ["Surplus","Deficit","Exact"]:
         if col not in grp.columns:
             grp[col] = 0
-    grp["Total_SKUs"]   = grp["Surplus"] + grp["Deficit"] + grp["Exact"]
+    grp["Total_SKUs"] = grp["Surplus"] + grp["Deficit"] + grp["Exact"]
+
+    grp = grp.merge(_req_per_site, on=["Site_Key","Store_Name"], how="left")
+    grp["Required_SKUs"] = grp["Required_SKUs"].fillna(TOTAL_TRACKED_SKUS).clip(lower=1)
+
     grp["Compliance_%"] = (
-        (grp["Surplus"] + grp["Exact"]) / TOTAL_TRACKED_SKUS * 100
+        (grp["Surplus"] + grp["Exact"]) / grp["Required_SKUs"] * 100
     ).round(1)
     return grp.sort_values("Compliance_%", ascending=True)
 

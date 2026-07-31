@@ -105,9 +105,13 @@ def _load_all_sheets() -> dict:
         if not loaded:
             out[out_key] = pd.DataFrame()
 
-    for tab in ["Ingredient Requirements", "Bidfood Stock", "Run Log"]:
+    for tab in ["Ingredient Requirements", "Run Log"]:
         out[tab] = _read_tab(tab)
         time.sleep(1)
+    # Bidfood Stock: prefer history (all weeks) over current tab
+    _bf_hist = _read_tab("Bidfood Stock History")
+    out["Bidfood Stock"] = _bf_hist if not _bf_hist.empty else _read_tab("Bidfood Stock")
+    time.sleep(1)
     return out
 
 def _safe(tab: str) -> pd.DataFrame:
@@ -214,15 +218,21 @@ for c in ["Total_Raw_Qty", "Total_Cost"]:
     if c in ingredient_s.columns:
         ingredient_s[c] = pd.to_numeric(ingredient_s[c], errors="coerce").fillna(0)
 
-# ── Derive Carry_Forward_Portions from existing columns (no pipeline rerun needed) ──
-if all(c in compliance.columns for c in ["Closing_Stock_g", "Portion_Required", "Required_Qty"]):
-    _req   = compliance["Required_Qty"].replace(0, float("nan"))
-    _p_req = compliance["Portion_Required"]
-    # Qty_new (g per portion) = Required_Qty / Portion_Required
-    # Carry_Forward_Portions  = Closing_Stock_g / Qty_new
-    compliance["Carry_Forward_Portions"] = (
-        compliance["Closing_Stock_g"] * _p_req / _req
-    ).round(1)
+# ── Derive Carry_Forward_Portions from existing columns ──────────────────────
+# Qty_new (g per portion) derived from Required side, fallback to Ordered side.
+# This avoids "None" when Required_Qty = 0 (site ordered but has no recipe req).
+if "Closing_Stock_g" in compliance.columns:
+    _cls_g = pd.to_numeric(compliance["Closing_Stock_g"], errors="coerce").fillna(0)
+    _qty_new = pd.Series(float("nan"), index=compliance.index)
+    if all(c in compliance.columns for c in ["Required_Qty", "Portion_Required"]):
+        _rq = pd.to_numeric(compliance["Required_Qty"], errors="coerce").fillna(0)
+        _pr = pd.to_numeric(compliance["Portion_Required"], errors="coerce").fillna(0)
+        _qty_new = (_rq / _pr).where(_pr > 0)
+    if all(c in compliance.columns for c in ["Ordered_Qty", "Portion_Ordered"]):
+        _oq = pd.to_numeric(compliance["Ordered_Qty"], errors="coerce").fillna(0)
+        _po = pd.to_numeric(compliance["Portion_Ordered"], errors="coerce").fillna(0)
+        _qty_new = _qty_new.fillna((_oq / _po).where(_po > 0))
+    compliance["Carry_Forward_Portions"] = (_cls_g / _qty_new).round(1)
 
 # ── Remap Status: Surplus/Exact → "Compliant", Deficit → "Non-Compliant" ──────
 if "Status" in compliance.columns:
@@ -286,19 +296,26 @@ if _wc_col_exists and len(_all_weeks) > 1:
     compliance   = compliance[compliance["Week_Commencing"] == sel_week]
     if "Week_Commencing" in site_summ.columns:
         site_summ = site_summ[site_summ["Week_Commencing"] == sel_week]
+    if "Week_Commencing" in bidfood_s.columns:
+        bidfood_s = bidfood_s[bidfood_s["Week_Commencing"] == sel_week]
 elif _wc_col_exists and len(_all_weeks) == 1:
+    sel_week = _all_weeks[0]
     st.caption(f"Week commencing: **{_all_weeks[0]}**")
 
 st.divider()
 
 # ── KPI Row ────────────────────────────────────────────────────────────────────
 _total_sites     = site_summ.shape[0] if not site_summ.empty else 0
-_compliant_sites = int((site_summ["Deficit"] == 0).sum()) if not site_summ.empty else 0
+# Site is Compliant if Compliance % >= 90
+_compliant_sites = int((site_summ["Compliance_%"] >= 90).sum()) if not site_summ.empty else 0
 _noncomp_sites   = _total_sites - _compliant_sites
 _avg_comp        = round(site_summ["Compliance_%"].mean(), 1) if not site_summ.empty else 0
-_bidfood_spend   = (bidfood_s["Total_Spend_GBP"]
-                    .apply(pd.to_numeric, errors="coerce").sum()
-                    if not bidfood_s.empty else 0)
+# Bidfood spend — filter to required sites (already filtered) for selected W/C
+_bf_spend_src = bidfood_s.copy() if not bidfood_s.empty else pd.DataFrame()
+if not _bf_spend_src.empty and _required_sites and "Site_Key" in _bf_spend_src.columns:
+    _bf_spend_src = _bf_spend_src[_bf_spend_src["Site_Key"].isin(_required_sites)]
+_bidfood_spend   = (pd.to_numeric(_bf_spend_src["Total_Spend_GBP"], errors="coerce").sum()
+                    if not _bf_spend_src.empty and "Total_Spend_GBP" in _bf_spend_src.columns else 0)
 
 k1, k2, k3, k4, k5 = st.columns(5)
 k1.metric("Sites Monitored",   _total_sites)
@@ -326,8 +343,8 @@ with tab1:
     with c_donut:
         st.subheader("Site Compliance")
         if not site_summ.empty:
-            n_comp    = int((site_summ["Deficit"] == 0).sum())
-            n_noncomp = int((site_summ["Deficit"] > 0).sum())
+            n_comp    = int((site_summ["Compliance_%"] >= 90).sum())
+            n_noncomp = int((site_summ["Compliance_%"] < 90).sum())
             _fig_donut = go.Figure(go.Pie(
                 labels=["Compliant", "Non-Compliant"],
                 values=[n_comp, n_noncomp],
