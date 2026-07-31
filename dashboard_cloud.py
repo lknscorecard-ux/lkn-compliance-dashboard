@@ -125,65 +125,54 @@ def _load_all_sheets() -> dict:
             out.setdefault("_load_errors", []).append(f"{ws_name}: {_e}")
             return pd.DataFrame()
 
-    # History tabs: read last 3 weeks of rows only to avoid timeout on large sheets.
-    # Each week ≈ 100-150 sites × 16 SKUs ≈ 1,600 rows → 3 weeks = 5,000 rows max.
-    HISTORY_TAIL = 5000
+    # History tail: 10k rows = ~6 weeks of data (125 sites × 16 SKUs × 6 weeks)
+    HISTORY_TAIL = 10000
 
     def _has_valid_site_keys(df):
         """Return True if at least 50% of Site_Key rows are non-blank."""
         if "Site_Key" not in df.columns or df.empty:
-            return True  # no Site_Key column — don't reject
+            return True
         n_valid = (df["Site_Key"].astype(str).str.strip() != "").sum()
         return n_valid >= max(1, len(df) * 0.5)
 
-    # Compliance Gap: combine current + history so all weeks appear in the W/C filter.
-    # Current tab has the latest week; History tab has prior weeks.
-    # Deduplicate on (Site_Key, SKU, Week_Commencing) keeping the current-tab row.
+    def _combine_with_history(cur_df, hist_df, dedup_cols=None):
+        """
+        Concat history + current; deduplicate so each (site, SKU, week) appears once.
+        Current-tab rows win over history rows for the same combination.
+        """
+        parts = []
+        if not hist_df.empty and _has_valid_site_keys(hist_df):
+            parts.append(hist_df)   # history first
+        if not cur_df.empty:
+            parts.append(cur_df)    # current last → wins dedup (keep="last")
+        if not parts:
+            return pd.DataFrame()
+        combined = pd.concat(parts, ignore_index=True)
+        if dedup_cols:
+            _dc = [c for c in dedup_cols if c in combined.columns]
+            if _dc:
+                combined = combined.drop_duplicates(subset=_dc, keep="last")
+        return combined
+
+    # Compliance Gap: combine current week + all prior weeks from history
     _comp_cur  = _read_tab("Compliance Gap")
     time.sleep(1)
     _comp_hist = _read_tab("Compliance History", tail_rows=HISTORY_TAIL)
     time.sleep(1)
-    if _comp_cur.empty and _comp_hist.empty:
-        out["Compliance Gap"] = pd.DataFrame()
-    elif _comp_cur.empty:
-        out["Compliance Gap"] = _comp_hist if _has_valid_site_keys(_comp_hist) else pd.DataFrame()
-    elif _comp_hist.empty or not _has_valid_site_keys(_comp_hist):
-        out["Compliance Gap"] = _comp_cur
-    else:
-        # Keep history rows whose Week_Commencing is NOT in the current tab
-        _cur_wks  = set(_comp_cur.get("Week_Commencing", pd.Series()).dropna().unique())
-        _hist_old = (
-            _comp_hist[~_comp_hist.get("Week_Commencing", pd.Series(dtype=str))
-                       .isin(_cur_wks)]
-            if "Week_Commencing" in _comp_hist.columns
-            else pd.DataFrame()
-        )
-        _hist_old = _hist_old[_has_valid_site_keys(_hist_old)] if not _hist_old.empty else _hist_old
-        out["Compliance Gap"] = (
-            pd.concat([_comp_cur, _hist_old], ignore_index=True)
-            if not _hist_old.empty else _comp_cur
-        )
+    out["Compliance Gap"] = _combine_with_history(
+        _comp_cur, _comp_hist,
+        dedup_cols=["Site_Key", "SKU", "Week_Commencing"],
+    )
 
-    # Site Summary: same combine logic
+    # Site Summary: same
     _ss_cur  = _read_tab("Site Summary")
     time.sleep(1)
     _ss_hist = _read_tab("Site Summary History", tail_rows=HISTORY_TAIL)
     time.sleep(1)
-    if _ss_cur.empty:
-        out["Site Summary"] = _ss_hist
-    elif _ss_hist.empty:
-        out["Site Summary"] = _ss_cur
-    else:
-        _cur_ss_wks  = set(_ss_cur.get("Week_Commencing", pd.Series()).dropna().unique())
-        _hist_ss_old = (
-            _ss_hist[~_ss_hist.get("Week_Commencing", pd.Series(dtype=str)).isin(_cur_ss_wks)]
-            if "Week_Commencing" in _ss_hist.columns
-            else pd.DataFrame()
-        )
-        out["Site Summary"] = (
-            pd.concat([_ss_cur, _hist_ss_old], ignore_index=True)
-            if not _hist_ss_old.empty else _ss_cur
-        )
+    out["Site Summary"] = _combine_with_history(
+        _ss_cur, _ss_hist,
+        dedup_cols=["Site_Key", "Week_Commencing"],
+    )
 
     for tab in ["Ingredient Requirements", "Run Log"]:
         out[tab] = _read_tab(tab)
