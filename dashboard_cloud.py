@@ -129,14 +129,23 @@ def _load_all_sheets() -> dict:
     # Each week ≈ 100-150 sites × 16 SKUs ≈ 1,600 rows → 3 weeks = 5,000 rows max.
     HISTORY_TAIL = 5000
 
-    for hist_tab, cur_tab, out_key in [
-        ("Compliance History",   "Compliance Gap", "Compliance Gap"),
-        ("Site Summary History", "Site Summary",   "Site Summary"),
+    def _has_valid_site_keys(df):
+        """Return True if at least 50% of Site_Key rows are non-blank."""
+        if "Site_Key" not in df.columns or df.empty:
+            return True  # no Site_Key column — don't reject
+        n_valid = (df["Site_Key"].astype(str).str.strip() != "").sum()
+        return n_valid >= max(1, len(df) * 0.5)
+
+    # Try current tab first (most reliable), then fall back to history.
+    # History tab is tried only if current is empty or has blank Site_Keys.
+    for cur_tab, hist_tab, out_key in [
+        ("Compliance Gap", "Compliance History",   "Compliance Gap"),
+        ("Site Summary",   "Site Summary History", "Site Summary"),
     ]:
         loaded = False
-        for tab_name, tail in [(hist_tab, HISTORY_TAIL), (cur_tab, None)]:
+        for tab_name, tail in [(cur_tab, None), (hist_tab, HISTORY_TAIL)]:
             df = _read_tab(tab_name, tail_rows=tail)
-            if not df.empty:
+            if not df.empty and _has_valid_site_keys(df):
                 out[out_key] = df
                 loaded = True
                 time.sleep(1)
@@ -269,6 +278,14 @@ if compliance.empty:
         if _all_data.get("_load_errors"):
             st.error("Sheet errors: " + " | ".join(_all_data["_load_errors"]))
         st.write(f"Required sites loaded: {len(_required_sites)}")
+        # Show sample keys from each side to diagnose mismatch
+        _raw_comp = _all_data.get("Compliance Gap", pd.DataFrame())
+        if not _raw_comp.empty and "Site_Key" in _raw_comp.columns:
+            st.write("Sample Site_Keys in compliance data:",
+                     _raw_comp["Site_Key"].dropna().unique()[:8].tolist())
+        if _required_sites:
+            st.write("Sample required Site_Keys (mapping sheet):",
+                     sorted(list(_required_sites))[:8])
     st.info("Click **🔄 Refresh Data** above. If this persists, run the pipeline first.")
     st.stop()
 
