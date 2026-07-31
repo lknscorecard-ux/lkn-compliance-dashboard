@@ -623,9 +623,17 @@ with tab2:
             if c not in _HIDDEN_COLS and c != "Status"
         ] + ([_st_display] if "Status" in _all_possible else [])
 
-        # Session-state key: initialise once per session
+        # Session-state key: initialise once per session.
+        # Sanitize any stale names from old column renames before using.
+        _valid_display_names = set(_col_display[c] for c in _all_possible)
         if "sites_col_toggle" not in st.session_state:
             st.session_state["sites_col_toggle"] = _default_visible_display
+        else:
+            # Drop any names that no longer exist (e.g. after a column rename deploy)
+            _clean = [d for d in st.session_state["sites_col_toggle"] if d in _valid_display_names]
+            if not _clean:
+                _clean = _default_visible_display
+            st.session_state["sites_col_toggle"] = _clean
 
         with st.expander("⚙️ Show / Hide Columns"):
             st.caption("Changes apply for your session. Ask admin to change the default for everyone.")
@@ -636,11 +644,12 @@ with tab2:
                 key="sites_col_toggle",
             )
 
-        # Map back to raw column names; Status (renamed) always last
+        # Map back to raw column names; only keep valid names; Status always last
+        _toggled_display = [d for d in _toggled_display if d in _display_to_raw]
         _show_cols_raw = [_display_to_raw[d] for d in _toggled_display if d != _st_display]
         if "Status" in [_display_to_raw.get(d) for d in _toggled_display]:
             _show_cols_raw.append("Status")
-        _show_cols = _show_cols_raw
+        _show_cols = _show_cols_raw or ["SKU", "Ingredient", "Status"]  # fallback
 
         # Apply display rename
         _disp2_show = _disp2[_show_cols].rename(columns={
