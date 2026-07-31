@@ -380,26 +380,28 @@ with tab1:
                 _food["SKU"].astype(str).map(_SKU_NAME_MAP).fillna(_food["Ingredient"])
             )
 
-            # Per-SKU per-site status (one pass, used by both charts)
-            _sku_site_raw = (
-                _food.groupby(["Display_Name", "Site_Key"])["Status"]
-                .apply(lambda s: "Non-Compliant" if (s == "Non-Compliant").any() else "Compliant")
+            # Per-SKU per-site status — avoid groupby.apply() (broken in pandas 3.x)
+            _food["_nc"] = (_food["Status"] == "Non-Compliant")
+            _nc_flag = (
+                _food.groupby(["Display_Name", "Site_Key"])["_nc"]
+                .any()
                 .reset_index()
             )
-            # pandas 2.x+ may keep or rename the value column — normalise it
-            _ss_val = [c for c in _sku_site_raw.columns if c not in ("Display_Name", "Site_Key")][0]
-            _sku_site = _sku_site_raw.rename(columns={_ss_val: "Site_Status"})
+            _nc_flag["Site_Status"] = _nc_flag["_nc"].map(
+                {True: "Non-Compliant", False: "Compliant"}
+            )
+            _sku_site = _nc_flag[["Display_Name", "Site_Key", "Site_Status"]]
 
             def _pct_sites(label):
-                # pandas 2.x+ returns series name not 0 after groupby apply
-                _res = (
-                    _sku_site.groupby("Display_Name")["Site_Status"]
-                    .apply(lambda x: round((x == label).sum() / len(x) * 100, 1))
+                _tmp = _sku_site.copy()
+                _tmp["_match"] = (_tmp["Site_Status"] == label).astype(int)
+                _agg = (
+                    _tmp.groupby("Display_Name")
+                    .agg(_sum=("_match", "sum"), _tot=("_match", "count"))
                     .reset_index()
                 )
-                # rename whatever the value column is called → "Pct"
-                _val_col = [c for c in _res.columns if c != "Display_Name"][0]
-                return _res.rename(columns={_val_col: "Pct"})
+                _agg["Pct"] = (_agg["_sum"] / _agg["_tot"] * 100).round(1)
+                return _agg[["Display_Name", "Pct"]]
 
             _nc_grp   = _pct_sites("Non-Compliant")
             _comp_grp = _pct_sites("Compliant")
@@ -415,7 +417,7 @@ with tab1:
                     _fig_nc = px.bar(
                         _nc5, x="Pct", y="Display_Name", orientation="h",
                         color_discrete_sequence=["#C00000"],
-                        text=_nc5["Pct"].apply(lambda v: f"{v:.1f}%"),
+                        text=[f"{v:.1f}%" for v in _nc5["Pct"]],
                         labels={"Pct": "Sites Non-Compliant %", "Display_Name": ""},
                     )
                     _fig_nc.update_traces(textposition="outside")
@@ -434,7 +436,7 @@ with tab1:
                     _fig_comp = px.bar(
                         _comp5, x="Pct", y="Display_Name", orientation="h",
                         color_discrete_sequence=["#538135"],
-                        text=_comp5["Pct"].apply(lambda v: f"{v:.1f}%"),
+                        text=[f"{v:.1f}%" for v in _comp5["Pct"]],
                         labels={"Pct": "Sites Compliant %", "Display_Name": ""},
                     )
                     _fig_comp.update_traces(textposition="outside")
@@ -456,7 +458,7 @@ with tab1:
             st.subheader("🏆 Top 10 Compliant Sites")
             _top10 = (site_summ.nlargest(10, "Compliance_%")
                       .sort_values("Compliance_%", ascending=True).copy())
-            _top10["label"] = _top10["Compliance_%"].apply(lambda x: f"{x:.1f}%")
+            _top10["label"] = [f"{x:.1f}%" for x in _top10["Compliance_%"]]
             _fig_top = px.bar(
                 _top10, x="Compliance_%", y="Store_Name",
                 orientation="h",
@@ -478,7 +480,7 @@ with tab1:
             st.subheader("⚠️ Bottom 10 Sites")
             _bot10 = (site_summ.nsmallest(10, "Compliance_%")
                       .sort_values("Compliance_%", ascending=False).copy())
-            _bot10["label"] = _bot10["Compliance_%"].apply(lambda x: f"{x:.1f}%")
+            _bot10["label"] = [f"{x:.1f}%" for x in _bot10["Compliance_%"]]
             _fig_bot = px.bar(
                 _bot10, x="Compliance_%", y="Store_Name",
                 orientation="h",
