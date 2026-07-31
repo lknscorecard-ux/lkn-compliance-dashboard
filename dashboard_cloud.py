@@ -421,38 +421,34 @@ elif _wc_col_exists and len(_all_weeks) == 1:
 
 st.divider()
 
-# ── KPI Row ────────────────────────────────────────────────────────────────────
-_total_sites     = site_summ.shape[0] if not site_summ.empty else 0
-# Site is Compliant if Compliance % >= 70
-_compliant_sites = int((site_summ["Compliance_%"] >= 70).sum()) if not site_summ.empty else 0
-_noncomp_sites   = _total_sites - _compliant_sites
-_avg_comp        = round(site_summ["Compliance_%"].mean(), 1) if not site_summ.empty else 0
-# Bidfood spend — filter to required sites (already filtered) for selected W/C
-_bf_spend_src = bidfood_s.copy() if not bidfood_s.empty else pd.DataFrame()
-if not _bf_spend_src.empty and _required_sites and "Site_Key" in _bf_spend_src.columns:
-    _bf_spend_src = _bf_spend_src[_bf_spend_src["Site_Key"].isin(_required_sites)]
-_bidfood_spend   = (pd.to_numeric(_bf_spend_src["Total_Spend_GBP"], errors="coerce").sum()
-                    if not _bf_spend_src.empty and "Total_Spend_GBP" in _bf_spend_src.columns else 0)
-
-k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Sites Monitored",   _total_sites)
-k2.metric("Avg Compliance",    f"{_avg_comp:.1f}%")
-k3.metric("Compliant Sites",   _compliant_sites,
-          delta=f"{_compliant_sites} of {_total_sites}", delta_color="normal")
-k4.metric("Non-Compliant",     _noncomp_sites,
-          delta=f"{_noncomp_sites} need attention" if _noncomp_sites else "All clear",
-          delta_color="inverse" if _noncomp_sites else "off")
-k5.metric("Bidfood Spend",     f"£{_bidfood_spend:,.0f}")
-
-st.divider()
-
-# ── Tabs (Recipe + Run Log removed) ───────────────────────────────────────────
+# ── Tabs ───────────────────────────────────────────────────────────────────────
 tab1, tab2 = st.tabs(["📊 Overview", "🏪 Sites"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — Overview
 # ══════════════════════════════════════════════════════════════════════════════
 with tab1:
+
+    # ── KPI Row (Overview only) ────────────────────────────────────────────────
+    _total_sites     = site_summ.shape[0] if not site_summ.empty else 0
+    _compliant_sites = int((site_summ["Compliance_%"] >= 70).sum()) if not site_summ.empty else 0
+    _noncomp_sites   = _total_sites - _compliant_sites
+    _avg_comp        = round(site_summ["Compliance_%"].mean(), 1) if not site_summ.empty else 0
+    _bf_spend_src    = bidfood_s.copy() if not bidfood_s.empty else pd.DataFrame()
+    if not _bf_spend_src.empty and _required_sites and "Site_Key" in _bf_spend_src.columns:
+        _bf_spend_src = _bf_spend_src[_bf_spend_src["Site_Key"].isin(_required_sites)]
+    _bidfood_spend   = (pd.to_numeric(_bf_spend_src["Total_Spend_GBP"], errors="coerce").sum()
+                        if not _bf_spend_src.empty and "Total_Spend_GBP" in _bf_spend_src.columns else 0)
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Sites Monitored",   _total_sites)
+    k2.metric("Avg Compliance",    f"{_avg_comp:.1f}%")
+    k3.metric("Compliant Sites",   _compliant_sites,
+              delta=f"{_compliant_sites} of {_total_sites}", delta_color="normal")
+    k4.metric("Non-Compliant",     _noncomp_sites,
+              delta=f"{_noncomp_sites} need attention" if _noncomp_sites else "All clear",
+              delta_color="inverse" if _noncomp_sites else "off")
+    k5.metric("Bidfood Spend",     f"£{_bidfood_spend:,.0f}")
+    st.divider()
 
     # ── Row 1: Donut + Top 10 Deficit SKUs ────────────────────────────────────
     c_donut, c_deficit = st.columns([1, 2])
