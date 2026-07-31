@@ -42,7 +42,7 @@ PROJECT_ID = "compliance-501910"
 REGION     = "europe-west2"
 JOB_NAME   = "lkn-pipeline"
 SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/cloud-platform",
 ]
