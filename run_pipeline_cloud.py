@@ -120,6 +120,47 @@ def _write_tab(gc: gspread.Client, sheet_id: str, tab: str, df: pd.DataFrame):
     log.info("  ✓ %-35s  %d rows", tab, len(df))
 
 
+def _upsert_tab(gc: gspread.Client, sheet_id: str, tab: str,
+                df: pd.DataFrame, wc: str):
+    """
+    Cumulative write for Compliance Gap and Site Summary.
+    Keeps all existing rows whose Week_Commencing != wc, then appends the
+    new rows.  This lets the sheet accumulate multiple weeks — the user can
+    manually correct W/C dates and they survive the next pipeline run.
+    """
+    sh  = gc.open_by_key(sheet_id)
+    new = df.fillna("").astype(str)
+    try:
+        ws       = sh.worksheet(tab)
+        existing = ws.get_all_values()
+    except gspread.exceptions.WorksheetNotFound:
+        ws       = sh.add_worksheet(
+            title=tab,
+            rows=max(len(new) + 10, 100),
+            cols=max(len(new.columns) + 2, 20),
+        )
+        existing = []
+
+    if not existing or len(existing) < 2:
+        # Sheet empty — write fresh
+        ws.clear()
+        ws.update([new.columns.tolist()] + new.values.tolist())
+        log.info("  ✓ %-35s  %d rows (fresh)", tab, len(new))
+        return
+
+    header = existing[0]
+    try:
+        wc_idx = header.index("Week_Commencing")
+        # Keep rows from OTHER weeks (user may have corrected their dates)
+        kept = [r for r in existing[1:] if len(r) > wc_idx and r[wc_idx] != wc]
+    except ValueError:
+        kept = existing[1:]   # no W/C column — keep everything
+
+    ws.clear()
+    ws.update([new.columns.tolist()] + kept + new.values.tolist())
+    log.info("  ✓ %-35s  %d new + %d kept from prior weeks", tab, len(new), len(kept))
+
+
 def _append_history(gc: gspread.Client, sheet_id: str, tab: str, df: pd.DataFrame):
     """Append df rows to a history tab (creates tab + header if absent)."""
     sh = gc.open_by_key(sheet_id)
@@ -516,8 +557,8 @@ def main():
     site_stock_wc = site_stock.copy()
     site_stock_wc.insert(0, "Week_Commencing", _wc)
 
-    _write_tab(gc, results_id, "Compliance Gap",           compliance)
-    _write_tab(gc, results_id, "Site Summary",             site_summ)
+    _upsert_tab(gc, results_id, "Compliance Gap",  compliance, _wc)
+    _upsert_tab(gc, results_id, "Site Summary",   site_summ,  _wc)
     _write_tab(gc, results_id, "Ingredient Requirements",  site_raw)
     _write_tab(gc, results_id, "Bidfood Stock",            site_stock_wc)
     _append_history(gc, results_id, "Bidfood Stock History", site_stock_wc)

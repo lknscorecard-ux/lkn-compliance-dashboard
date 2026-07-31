@@ -135,40 +135,27 @@ def _load_all_sheets() -> dict:
         n_valid = (df["Site_Key"].astype(str).str.strip() != "").sum()
         return n_valid >= max(1, len(df) * 0.5)
 
-    def _merge_cur_hist(cur_df, hist_df):
-        """
-        History is the primary source (user manually maintains correct W/C dates there).
-        Gap/current only supplements with weeks that are NOT already in history.
-        Falls back to current-only if history is empty or has bad Site_Keys.
-        """
-        hist_ok = not hist_df.empty and _has_valid_site_keys(hist_df)
-        if not hist_ok:
-            return cur_df  # no usable history → just use current tab
-        if cur_df.empty:
-            return hist_df
-        # Find weeks in current that are NOT covered by history
-        _hist_wks = set(hist_df.get("Week_Commencing", pd.Series()).dropna().astype(str).unique())
-        if "Week_Commencing" in cur_df.columns:
-            _cur_new = cur_df[~cur_df["Week_Commencing"].astype(str).isin(_hist_wks)]
-        else:
-            _cur_new = pd.DataFrame()
-        if _cur_new.empty:
-            return hist_df  # history already covers all weeks in current
-        return pd.concat([hist_df, _cur_new], ignore_index=True)
+    # Compliance Gap is now cumulative (pipeline upserts by week).
+    # Read it directly — it contains all weeks, oldest to newest.
+    # Fall back to Compliance History only if Gap is empty or has bad Site_Keys.
+    _comp_cur = _read_tab("Compliance Gap")
+    time.sleep(1)
+    if _comp_cur.empty or not _has_valid_site_keys(_comp_cur):
+        _comp_hist = _read_tab("Compliance History", tail_rows=HISTORY_TAIL)
+        time.sleep(1)
+        out["Compliance Gap"] = _comp_hist if _has_valid_site_keys(_comp_hist) else _comp_cur
+    else:
+        out["Compliance Gap"] = _comp_cur
 
-    # Compliance data: History is primary (all manually-corrected weeks)
-    _comp_hist = _read_tab("Compliance History", tail_rows=HISTORY_TAIL)
+    # Site Summary: same
+    _ss_cur = _read_tab("Site Summary")
     time.sleep(1)
-    _comp_cur  = _read_tab("Compliance Gap")
-    time.sleep(1)
-    out["Compliance Gap"] = _merge_cur_hist(_comp_cur, _comp_hist)
-
-    # Site Summary: same logic
-    _ss_hist = _read_tab("Site Summary History", tail_rows=HISTORY_TAIL)
-    time.sleep(1)
-    _ss_cur  = _read_tab("Site Summary")
-    time.sleep(1)
-    out["Site Summary"] = _merge_cur_hist(_ss_cur, _ss_hist)
+    if _ss_cur.empty:
+        _ss_hist = _read_tab("Site Summary History", tail_rows=HISTORY_TAIL)
+        time.sleep(1)
+        out["Site Summary"] = _ss_hist
+    else:
+        out["Site Summary"] = _ss_cur
 
     for tab in ["Ingredient Requirements", "Run Log"]:
         out[tab] = _read_tab(tab)
