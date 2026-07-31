@@ -351,6 +351,60 @@ if "Closing_Stock_g" in compliance.columns:
         _qty_new = _qty_new.fillna((_oq / _po).where(_po > 0))
     compliance["Carry_Forward_Portions"] = (_cls_g / _qty_new).round(1)
 
+# ── Per-SKU compliance tolerance (applied in dashboard as pipeline fallback) ──
+# If Portion_Gap >= -tolerance_portions, reclassify Deficit → Exact (Compliant).
+# Carry-forward stock is already included in Portion_Gap.
+_TOLERANCE_PORTIONS = {
+    "34188": 1, "30110": 1, "6583":  1, "06583": 1,
+    "15661": 1, "18363": 1, "25788": 1,
+    "26364": 1, "17339": 1,
+    "26214": 2,
+    "22667": 2, "22668": 2, "26222": 2, "26227": 2,
+    "26229": 2, "29053": 2, "30003": 2,
+}
+if ("Portion_Gap" in compliance.columns
+        and "Status" in compliance.columns
+        and "SKU" in compliance.columns):
+    _tol = compliance["SKU"].astype(str).str.strip().map(_TOLERANCE_PORTIONS).fillna(0)
+    _pg  = pd.to_numeric(compliance["Portion_Gap"], errors="coerce").fillna(0)
+    _within_tol = (compliance["Status"] == "Deficit") & (_pg >= -_tol)
+    compliance.loc[_within_tol, "Status"] = "Exact"
+
+# ── Compute Cases columns in dashboard (Total_Ordered_Qty / Cases_Ordered = g/case) ──
+# This avoids needing a pipeline rebuild — Pack_Qty is derived from existing Bidfood data.
+if (not bidfood_s.empty
+        and "Total_Ordered_Qty" in bidfood_s.columns
+        and "Cases_Ordered" in bidfood_s.columns):
+    _bf_pk = bidfood_s.copy()
+    _bf_pk["_pack_qty"] = (
+        pd.to_numeric(_bf_pk["Total_Ordered_Qty"], errors="coerce") /
+        pd.to_numeric(_bf_pk["Cases_Ordered"],     errors="coerce")
+    )
+    _pk_map = (
+        _bf_pk.dropna(subset=["_pack_qty"])
+        .query("_pack_qty > 0")
+        .groupby(["Site_Key", "Product Code"])["_pack_qty"]
+        .first()
+    )
+    _c_keys = list(zip(
+        compliance["Site_Key"].astype(str).str.strip(),
+        compliance["SKU"].astype(str).str.strip(),
+    ))
+    _pk_vals = pd.to_numeric(
+        pd.Series([_pk_map.get(k, float("nan")) for k in _c_keys], index=compliance.index),
+        errors="coerce",
+    )
+    _valid_pk = _pk_vals.notna() & (_pk_vals > 0)
+    for _raw_col, _case_col in [
+        ("Required_Qty", "Cases_Required"),
+        ("Ordered_Qty",  "Cases_Ordered"),
+        ("Gap",          "Cases_Gap"),
+    ]:
+        if _raw_col in compliance.columns:
+            compliance[_case_col] = (
+                pd.to_numeric(compliance[_raw_col], errors="coerce") / _pk_vals
+            ).round(2).where(_valid_pk)
+
 # ── Remap Status: Surplus/Exact → "Compliant", Deficit → "Non-Compliant" ──────
 if "Status" in compliance.columns:
     compliance["Status"] = compliance["Status"].map({
