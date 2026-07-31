@@ -56,13 +56,23 @@ def _get_creds():
 def _get_gc():
     return gspread.authorize(_get_creds())
 
-def _trigger_pipeline():
+def _trigger_pipeline(wc_override: str = ""):
+    """Trigger the Cloud Run pipeline job, optionally overriding the Week_Commencing date."""
     import google.auth.transport.requests, requests as _req
     creds = _get_creds()
     creds.refresh(google.auth.transport.requests.Request())
     url  = (f"https://{REGION}-run.googleapis.com/apis/run.googleapis.com/v1"
             f"/namespaces/{PROJECT_ID}/jobs/{JOB_NAME}:run")
-    resp = _req.post(url, headers={"Authorization": f"Bearer {creds.token}"})
+    body = {}
+    if wc_override:
+        body = {
+            "overrides": {
+                "containerOverrides": [{
+                    "env": [{"name": "WC_OVERRIDE", "value": wc_override}]
+                }]
+            }
+        }
+    resp = _req.post(url, json=body, headers={"Authorization": f"Bearer {creds.token}"})
     if not resp.ok:
         raise RuntimeError(resp.text)
 
@@ -231,11 +241,22 @@ with h1:
     else:
         st.title("LKN Compliance Dashboard")
 with h2:
-    if st.button("▶ Run Pipeline Now", type="primary", use_container_width=True):
+    import datetime as _dt
+    # Default to the Monday of last week
+    _today    = _dt.date.today()
+    _last_mon = _today - _dt.timedelta(days=_today.weekday() + 7)
+    _wc_pick  = st.date_input(
+        "Week commencing",
+        value=_last_mon,
+        format="DD/MM/YYYY",
+        help="Set the week this Bidfood report covers before running the pipeline.",
+        key="pipeline_wc_picker",
+    )
+    if st.button("▶ Run Pipeline", type="primary", use_container_width=True):
         with st.spinner("Triggering pipeline …"):
             try:
-                _trigger_pipeline()
-                st.success("Pipeline started — results update in ~2 min.")
+                _trigger_pipeline(wc_override=str(_wc_pick))
+                st.success(f"Pipeline started for W/C {_wc_pick} — results update in ~2 min.")
             except Exception as e:
                 st.error(f"Failed: {e}")
 with h3:

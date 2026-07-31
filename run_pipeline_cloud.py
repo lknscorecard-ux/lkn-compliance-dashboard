@@ -520,9 +520,16 @@ def main():
         log.warning("  Case enrichment skipped: %s", _e)
 
     # ── Week commencing tag ───────────────────────────────────────────────────
+    # Prefer WC_OVERRIDE env var (set by dashboard date picker) so the user
+    # never needs to manually edit the sheet.  Falls back to previous Monday.
     from datetime import timedelta
     _run_dt = datetime.now(timezone.utc)
-    _wc = (_run_dt - timedelta(days=_run_dt.weekday() + 7)).strftime("%Y-%m-%d")  # previous Monday
+    _wc = os.environ.get("WC_OVERRIDE", "").strip()
+    if _wc:
+        log.info("  Week commencing from WC_OVERRIDE: %s", _wc)
+    else:
+        _wc = (_run_dt - timedelta(days=_run_dt.weekday() + 7)).strftime("%Y-%m-%d")
+        log.info("  Week commencing (auto): %s", _wc)
     compliance.insert(0, "Week_Commencing", _wc)
     site_summ.insert(0, "Week_Commencing", _wc)
 
