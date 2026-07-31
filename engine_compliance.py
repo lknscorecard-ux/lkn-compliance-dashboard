@@ -142,15 +142,26 @@ def run(
     # from the previous week's run. If absent (first run), defaults to 0.
     compliance["Opening_Stock_g"] = 0.0
     if opening_stock is not None and not opening_stock.empty:
+        # Normalise keys on BOTH sides: strip whitespace, cast to str.
+        # This prevents "6583" vs "06583" or trailing-space mismatches.
+        _os = opening_stock.copy()
+        _os["Site_Key"] = _os["Site_Key"].astype(str).str.strip()
+        _os["SKU"]      = _os["SKU"].astype(str).str.strip()
         _os_map = (
-            opening_stock
-            .assign(SKU=lambda d: d["SKU"].astype(str))
-            .set_index(["Site_Key", "SKU"])["Closing_Stock_g"]
+            _os.groupby(["Site_Key", "SKU"])["Closing_Stock_g"]
+            .sum()  # sum in case of duplicates
             .to_dict()
         )
         compliance["Opening_Stock_g"] = compliance.apply(
-            lambda r: float(_os_map.get((r["Site_Key"], str(r["SKU"])), 0.0)),
+            lambda r: float(_os_map.get(
+                (str(r["Site_Key"]).strip(), str(r["SKU"]).strip()), 0.0
+            )),
             axis=1,
+        )
+        _matched = int((compliance["Opening_Stock_g"] > 0).sum())
+        import logging as _log
+        _log.getLogger(__name__).info(
+            "  Opening stock applied to %d rows (non-zero)", _matched
         )
 
     # Recompute Gap = (Ordered + Opening) − Required  (all in normalised g/ml)
@@ -174,10 +185,13 @@ def run(
     return compliance[cols].sort_values(["Site_Key","SKU"]).reset_index(drop=True)
 
 
+TOTAL_TRACKED_SKUS = 16  # fixed denominator for compliance %
+
 def site_summary(compliance: pd.DataFrame) -> pd.DataFrame:
     """
-    Summarise compliance at site level:
-    counts of Surplus / Deficit / Exact SKUs per site.
+    Summarise compliance at site level.
+    Compliance % = Compliant SKUs / 14 (total tracked SKUs).
+    Missing SKUs for a site implicitly count as non-compliant.
     """
     grp = (
         compliance
@@ -196,9 +210,9 @@ def site_summary(compliance: pd.DataFrame) -> pd.DataFrame:
     for col in ["Surplus","Deficit","Exact"]:
         if col not in grp.columns:
             grp[col] = 0
-    grp["Total_SKUs"] = grp["Surplus"] + grp["Deficit"] + grp["Exact"]
+    grp["Total_SKUs"]   = grp["Surplus"] + grp["Deficit"] + grp["Exact"]
     grp["Compliance_%"] = (
-        (grp["Surplus"] + grp["Exact"]) / grp["Total_SKUs"].replace(0, 1) * 100
+        (grp["Surplus"] + grp["Exact"]) / TOTAL_TRACKED_SKUS * 100
     ).round(1)
     return grp.sort_values("Compliance_%", ascending=True)
 

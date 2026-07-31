@@ -267,6 +267,8 @@ _SKU_NAME_MAP = {
     "26229": "LKN Truffle Mayo",
     "29053": "LKN Miso Mayo",
     "30003": "LKN Ranch Sauce",
+    "26364": "LKN Chick'n Burger",
+    "17339": "LKN Vegan Beef",
 }
 _FOOD_SKUS = set(_SKU_NAME_MAP.keys())
 

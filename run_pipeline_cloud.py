@@ -146,15 +146,32 @@ def _load_stock_on_hand(gc: gspread.Client, sheet_id: str) -> pd.DataFrame:
     try:
         sh  = gc.open_by_key(sheet_id)
         ws  = sh.worksheet("Stock on Hand")
-        recs = ws.get_all_records()
-        if not recs:
+        raw = ws.get_all_values()          # safe — no duplicate-header crash
+        if not raw or len(raw) < 2:
+            log.info("  Stock on Hand: tab empty or header-only — first run?")
             return pd.DataFrame()
-        df = pd.DataFrame(recs)
-        df["Closing_Stock_g"] = pd.to_numeric(
-            df.get("Closing_Stock_g", 0), errors="coerce"
-        ).fillna(0)
+        df = pd.DataFrame(raw[1:], columns=raw[0]).fillna("").astype(str)
+        df.columns = df.columns.str.strip()
+        df = df.loc[:, ~df.columns.duplicated()]
+        for c in df.columns:
+            df[c] = df[c].str.strip()
+        if "Closing_Stock_g" not in df.columns:
+            log.warning("  Stock on Hand: 'Closing_Stock_g' column missing — columns: %s", df.columns.tolist())
+            return pd.DataFrame()
+        df["Closing_Stock_g"] = pd.to_numeric(df["Closing_Stock_g"], errors="coerce").fillna(0)
+        # Normalise SKU: strip whitespace, keep as string (preserve leading zeros)
+        if "SKU" in df.columns:
+            df["SKU"] = df["SKU"].str.strip()
+        if "Site_Key" in df.columns:
+            df["Site_Key"] = df["Site_Key"].str.strip()
+        log.info("  Stock on Hand: %d site×SKU rows loaded (non-zero: %d)",
+                 len(df), int((df["Closing_Stock_g"] > 0).sum()))
         return df
     except gspread.exceptions.WorksheetNotFound:
+        log.info("  Stock on Hand: tab not found — first run?")
+        return pd.DataFrame()
+    except Exception as _e:
+        log.warning("  Stock on Hand: failed to load (%s) — proceeding with zero opening stock", _e)
         return pd.DataFrame()
 
 
@@ -338,6 +355,7 @@ def main():
     _LKN_FOOD_SKUS = {
         "34188","30110","6583","06583","15661","18363",
         "25788","26214","22667","22668","26222","26227","26229","29053","30003",
+        "26364","17339",
     }
     site_raw   = site_raw[site_raw["SKU"].astype(str).isin(_LKN_FOOD_SKUS)].copy()
     site_stock = site_stock[site_stock["Product Code"].astype(str).isin(_LKN_FOOD_SKUS)].copy()
