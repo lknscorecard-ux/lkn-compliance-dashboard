@@ -367,8 +367,11 @@ if ("Portion_Gap" in compliance.columns
         and "SKU" in compliance.columns):
     _tol = compliance["SKU"].astype(str).str.strip().map(_TOLERANCE_PORTIONS).fillna(0)
     _pg  = pd.to_numeric(compliance["Portion_Gap"], errors="coerce").fillna(0)
-    _within_tol = (compliance["Status"] == "Deficit") & (_pg >= -_tol)
-    compliance.loc[_within_tol, "Status"] = "Exact"
+    # Match both "Deficit" (pipeline raw) and "Non-Compliant" (pipeline pre-remapped)
+    _within_tol = (
+        compliance["Status"].isin(["Deficit", "Non-Compliant"]) & (_pg >= -_tol)
+    )
+    compliance.loc[_within_tol, "Status"] = "Compliant"
 
 # ── Compute Cases columns in dashboard (Total_Ordered_Qty / Cases_Ordered = g/case) ──
 # This avoids needing a pipeline rebuild — Pack_Qty is derived from existing Bidfood data.
