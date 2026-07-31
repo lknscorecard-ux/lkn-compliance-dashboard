@@ -487,15 +487,6 @@ if ("Portion_Gap" in compliance.columns
 HAS_PORTIONS = ("Portion_Gap" in compliance.columns
                 and pd.to_numeric(compliance["Portion_Gap"], errors="coerce").abs().sum() > 0)
 
-# ── Site ranking — assigned AFTER required-sites filter so ranks are sequential ─
-if not site_summ.empty and "Compliance_%" in site_summ.columns:
-    site_summ = (site_summ
-                 .sort_values("Compliance_%", ascending=False)
-                 .reset_index(drop=True))
-    if "Rank" in site_summ.columns:
-        site_summ = site_summ.drop(columns=["Rank"])
-    site_summ.insert(0, "Rank", range(1, len(site_summ) + 1))
-
 # ── Last run banner ────────────────────────────────────────────────────────────
 if not run_log.empty:
     last = run_log.iloc[-1]
@@ -546,6 +537,15 @@ if _wc_col_exists and len(_all_weeks) >= 1:
         site_summ = site_summ[site_summ["Week_Commencing"] == sel_week]
     if "Week_Commencing" in bidfood_s.columns:
         bidfood_s = bidfood_s[bidfood_s["Week_Commencing"] == sel_week]
+
+# ── Site ranking — after W/C filter so ranks are 1..N for the selected week ───
+if not site_summ.empty and "Compliance_%" in site_summ.columns:
+    site_summ = (site_summ
+                 .sort_values("Compliance_%", ascending=False)
+                 .reset_index(drop=True))
+    if "Rank" in site_summ.columns:
+        site_summ = site_summ.drop(columns=["Rank"])
+    site_summ.insert(0, "Rank", range(1, len(site_summ) + 1))
 
 st.divider()
 
