@@ -59,8 +59,16 @@ def _get_gc():
 def _set_wc_override(wc_date: str):
     """Write the chosen W/C date to the 'Pipeline Config' tab so the pipeline picks it up."""
     sid = (st.secrets.get("RESULTS_SHEET_ID") or os.environ.get("RESULTS_SHEET_ID", RESULTS_SHEET_ID))
-    gc  = _get_gc()
-    sh  = gc.open_by_key(sid)
+    # Create fresh write-scoped credentials — do NOT use the cached readonly client
+    _write_scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    from google.oauth2.service_account import Credentials as _Creds
+    _info = dict(st.secrets["gcp_service_account"])
+    _creds = _Creds.from_service_account_info(_info, scopes=_write_scopes)
+    _gc = gspread.authorize(_creds)
+    sh  = _gc.open_by_key(sid)
     try:
         ws = sh.worksheet("Pipeline Config")
         ws.clear()
