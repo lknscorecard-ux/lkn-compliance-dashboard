@@ -373,20 +373,29 @@ if ("Portion_Gap" in compliance.columns
     )
     compliance.loc[_within_tol, "Status"] = "Compliant"
 
-# ── Compute Cases columns in dashboard (Total_Ordered_Qty / Cases_Ordered = g/case) ──
-# This avoids needing a pipeline rebuild — Pack_Qty is derived from existing Bidfood data.
-if (not bidfood_s.empty
-        and "Total_Ordered_Qty" in bidfood_s.columns
-        and "Cases_Ordered" in bidfood_s.columns):
+# ── Compute Cases columns in dashboard (grams ÷ pack_g = cases) ──────────────
+# Primary source: Pack_Qty column (g per case from pack-size parser).
+# Fallback: Total_Ordered_Qty / Cases_Ordered.
+# Strip values BEFORE the join to avoid whitespace mismatches.
+if not bidfood_s.empty:
     _bf_pk = bidfood_s.copy()
-    _bf_pk["_pack_qty"] = (
-        pd.to_numeric(_bf_pk["Total_Ordered_Qty"], errors="coerce") /
-        pd.to_numeric(_bf_pk["Cases_Ordered"],     errors="coerce")
-    )
+    # Strip join keys so lookup matches compliance values
+    _bf_pk["Site_Key"]     = _bf_pk["Site_Key"].astype(str).str.strip()
+    _bf_pk["Product Code"] = _bf_pk["Product Code"].astype(str).str.strip()
+
+    if "Pack_Qty" in _bf_pk.columns:
+        _bf_pk["_pack_g"] = pd.to_numeric(_bf_pk["Pack_Qty"], errors="coerce")
+    elif "Total_Ordered_Qty" in _bf_pk.columns and "Cases_Ordered" in _bf_pk.columns:
+        _cases_ord = pd.to_numeric(_bf_pk["Cases_Ordered"],     errors="coerce")
+        _tot_ord   = pd.to_numeric(_bf_pk["Total_Ordered_Qty"], errors="coerce")
+        _bf_pk["_pack_g"] = _tot_ord / _cases_ord
+    else:
+        _bf_pk["_pack_g"] = float("nan")
+
     _pk_map = (
-        _bf_pk.dropna(subset=["_pack_qty"])
-        .query("_pack_qty > 0")
-        .groupby(["Site_Key", "Product Code"])["_pack_qty"]
+        _bf_pk.dropna(subset=["_pack_g"])
+        .query("_pack_g > 0")
+        .groupby(["Site_Key", "Product Code"])["_pack_g"]
         .first()
     )
     _c_keys = list(zip(
@@ -413,6 +422,17 @@ if "Status" in compliance.columns:
     compliance["Status"] = compliance["Status"].map({
         "Surplus": "Compliant", "Exact": "Compliant", "Deficit": "Non-Compliant"
     }).fillna(compliance["Status"])
+
+# ── Second tolerance pass (catches any Non-Compliant that survived the remap) ──
+# Runs after Status remap so it definitively overrides with Compliant.
+if ("Portion_Gap" in compliance.columns
+        and "Status" in compliance.columns
+        and "SKU" in compliance.columns):
+    _tol2 = compliance["SKU"].astype(str).str.strip().map(_TOLERANCE_PORTIONS).fillna(0)
+    _pg2  = pd.to_numeric(compliance["Portion_Gap"], errors="coerce").fillna(0)
+    _has_tol = _tol2 > 0  # only apply to SKUs that have a tolerance
+    _within2  = (compliance["Status"] == "Non-Compliant") & _has_tol & (_pg2 >= -_tol2)
+    compliance.loc[_within2, "Status"] = "Compliant"
 
 # ── Derived flags ──────────────────────────────────────────────────────────────
 HAS_PORTIONS = ("Portion_Gap" in compliance.columns
@@ -837,8 +857,10 @@ with tab2:
             _c = {"Compliant": "#E5F5E0", "Non-Compliant": "#FFE8E8"}
             return f"background-color: {_c.get(val, '')}"
 
-        # ── Columns shown globally (change in code to update for all users) ──
-        # Hidden: raw qty/UOM columns + Week_Commencing
+        # ── Column visibility ──────────────────────────────────────────────────
+        # _PERM_HIDDEN: never shown, not available in the toggle.
+        # _HIDDEN_COLS: hidden by default but user can add them via the toggle.
+        _PERM_HIDDEN = {"Site_Key", "Carry_Forward_Portions"}
         _HIDDEN_COLS = {"Required_Qty", "Req_UOM", "Ordered_Qty", "Ord_UOM", "Gap",
                         "Opening_Stock_g", "Closing_Stock_g", "Week_Commencing"}
         _COL_RENAME  = {
@@ -859,7 +881,7 @@ with tab2:
                           "Portion_Ordered",  "Cases_Ordered",
                           "Portion_Gap",      "Cases_Gap",
                           "Carry_Forward_Portions", "Status"]
-                         if c in _disp2.columns]
+                         if c in _disp2.columns and c not in _PERM_HIDDEN]
 
         # Display names for the toggle UI (same as _COL_RENAME where applicable)
         _col_display = {c: _COL_RENAME.get(c, c) for c in _all_possible}
@@ -872,25 +894,34 @@ with tab2:
             if c not in _HIDDEN_COLS and c != "Status"
         ] + ([_st_display] if "Status" in _all_possible else [])
 
-        # Session-state key: initialise once per session.
-        # Sanitize any stale names from old column renames before using.
+        # Session-state key: initialise from URL query params (survives page refresh)
+        # then sanitize any stale column names after a code deploy.
         _valid_display_names = set(_col_display[c] for c in _all_possible)
+
         if "sites_col_toggle" not in st.session_state:
-            st.session_state["sites_col_toggle"] = _default_visible_display
+            # First render: try to restore from ?cols=... query param
+            _qp_raw = st.query_params.get("cols", "")
+            _from_qp = [c for c in _qp_raw.split(",") if c in _valid_display_names] if _qp_raw else []
+            st.session_state["sites_col_toggle"] = _from_qp if _from_qp else _default_visible_display
         else:
-            # Drop any names that no longer exist (e.g. after a column rename deploy)
+            # Subsequent renders: drop any stale names (column renames between deploys)
             _clean = [d for d in st.session_state["sites_col_toggle"] if d in _valid_display_names]
-            if not _clean:
-                _clean = _default_visible_display
-            st.session_state["sites_col_toggle"] = _clean
+            st.session_state["sites_col_toggle"] = _clean if _clean else _default_visible_display
+
+        def _save_col_prefs():
+            _sel = st.session_state.get("sites_col_toggle", [])
+            if _sel:
+                st.query_params["cols"] = ",".join(_sel)
+            elif "cols" in st.query_params:
+                del st.query_params["cols"]
 
         with st.expander("⚙️ Show / Hide Columns"):
-            st.caption("Changes apply for your session. Ask admin to change the default for everyone.")
+            st.caption("Column choices are saved in your browser URL — they survive a page refresh.")
             _toggled_display = st.multiselect(
                 "Visible columns",
                 options=[_col_display[c] for c in _all_possible],
-                default=st.session_state["sites_col_toggle"],
                 key="sites_col_toggle",
+                on_change=_save_col_prefs,
             )
 
         # Map back to raw column names; only keep valid names; Status always last
