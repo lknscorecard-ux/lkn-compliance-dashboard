@@ -310,6 +310,17 @@ if not _site_mapping.empty and "Site Key" in _site_mapping.columns and "Account 
         .replace("", pd.NA).dropna()
         .to_dict()
     )
+
+# Build Site_Key → Last Order Date lookup
+_site_key_to_last_order: dict = {}
+if not _site_mapping.empty and "Site Key" in _site_mapping.columns:
+    _lod_col = next((c for c in _site_mapping.columns if "last order" in c.lower()), None)
+    if _lod_col:
+        _site_key_to_last_order = (
+            _site_mapping.set_index("Site Key")[_lod_col]
+            .replace("", pd.NA).dropna()
+            .to_dict()
+        )
 if _required_sites:
     _before = len(compliance)
     if "Site_Key" in compliance.columns:
@@ -738,14 +749,20 @@ with tab1:
             _disp["Compliant SKUs"] = _disp["Surplus"] + _disp["Exact"]
         elif "Surplus" in _disp.columns:
             _disp["Compliant SKUs"] = _disp["Surplus"]
+        # Join Last Order Date from mapping sheet
+        if _site_key_to_last_order and "Site_Key" in _disp.columns:
+            _disp["Last Order Date"] = (
+                _disp["Site_Key"].astype(str).map(_site_key_to_last_order).fillna("—")
+            )
         # Select and rename columns for display
         _col_map = {
-            "Rank":           "Rank",
-            "Store_Name":     "Store",
-            "Compliant SKUs": "Compliant SKUs",
-            "Deficit":        "Non-Compliant SKUs",
-            "Total_SKUs":     "Total SKUs",
-            "Compliance_%":   "Compliance %",
+            "Rank":             "Rank",
+            "Store_Name":       "Store",
+            "Compliant SKUs":   "Compliant SKUs",
+            "Deficit":          "Non-Compliant SKUs",
+            "Total_SKUs":       "Total SKUs",
+            "Compliance_%":     "Compliance %",
+            "Last Order Date":  "Last Order Date",
         }
         _disp = _disp[[c for c in _col_map if c in _disp.columns]].rename(columns=_col_map)
         _int_cols = [c for c in ["Rank","Compliant SKUs","Non-Compliant SKUs","Total SKUs"] if c in _disp.columns]
