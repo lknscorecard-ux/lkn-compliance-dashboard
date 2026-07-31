@@ -70,11 +70,29 @@ def _trigger_pipeline():
 @st.cache_data(ttl=600, show_spinner=False)
 def _load_all_sheets() -> dict:
     import time
+    out = {}
     sid = (st.secrets.get("RESULTS_SHEET_ID")
            or os.environ.get("RESULTS_SHEET_ID", RESULTS_SHEET_ID))
-    gc  = _get_gc()
-    sh  = gc.open_by_key(sid)
-    out = {}
+    if not sid:
+        out["_load_errors"] = ["RESULTS_SHEET_ID secret is not set."]
+        return out
+
+    # Retry up to 3 times with backoff — handles transient quota / 503 errors
+    sh = None
+    for _attempt in range(3):
+        try:
+            gc = _get_gc()
+            sh = gc.open_by_key(sid)
+            break
+        except gspread.exceptions.APIError as _e:
+            if _attempt < 2:
+                time.sleep(4 ** _attempt)   # 1s, 4s
+            else:
+                out["_load_errors"] = [f"Google Sheets API error after 3 attempts: {_e}"]
+                return out
+        except Exception as _e:
+            out["_load_errors"] = [f"Failed to open Google Sheet: {_e}"]
+            return out
 
     def _read_tab(ws_name, tail_rows=None):
         """Read a worksheet safely. tail_rows=N reads only the last N data rows (+ header)."""
@@ -229,17 +247,29 @@ if _required_sites:
         compliance = compliance[compliance["Site_Key"].isin(_required_sites)]
     if "Site_Key" in site_summ.columns:
         site_summ  = site_summ[site_summ["Site_Key"].isin(_required_sites)]
-    # Safety: if filter wiped everything, fall back to unfiltered
-    if compliance.empty and _before > 0:
+    # Safety: filter wiped everything (or data never loaded) → show unfiltered
+    if compliance.empty:
         compliance = _safe("Compliance Gap")
         if "Site_Key" in compliance.columns:
             compliance = compliance[compliance["Site_Key"].str.strip() != ""]
         if "SKU" in compliance.columns:
             compliance = compliance[compliance["SKU"].str.strip() != ""]
-        st.warning("⚠️ Required Sites filter removed all data — showing unfiltered. Check Site Key values in mapping sheet.")
+        if not compliance.empty and _before > 0:
+            st.warning("⚠️ Required Sites filter removed all data — showing unfiltered. Check Site Key values in mapping sheet.")
 
 if compliance.empty:
-    st.info("No compliance data found. Run the pipeline to generate data.")
+    st.error("No compliance data loaded from Google Sheets.")
+    with st.expander("🔍 Debug info — expand to diagnose", expanded=True):
+        _tab_info = {
+            k: (f"{len(v)} rows, cols: {list(v.columns[:5])}" if isinstance(v, pd.DataFrame) and not v.empty
+                else ("empty" if isinstance(v, pd.DataFrame) else str(v)))
+            for k, v in _all_data.items() if k != "_load_errors"
+        }
+        st.json(_tab_info)
+        if _all_data.get("_load_errors"):
+            st.error("Sheet errors: " + " | ".join(_all_data["_load_errors"]))
+        st.write(f"Required sites loaded: {len(_required_sites)}")
+    st.info("Click **🔄 Refresh Data** above. If this persists, run the pipeline first.")
     st.stop()
 
 # ── Numeric coercion ───────────────────────────────────────────────────────────
