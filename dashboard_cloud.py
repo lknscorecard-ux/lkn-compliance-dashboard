@@ -135,44 +135,40 @@ def _load_all_sheets() -> dict:
         n_valid = (df["Site_Key"].astype(str).str.strip() != "").sum()
         return n_valid >= max(1, len(df) * 0.5)
 
-    def _combine_with_history(cur_df, hist_df, dedup_cols=None):
+    def _merge_cur_hist(cur_df, hist_df):
         """
-        Concat history + current; deduplicate so each (site, SKU, week) appears once.
-        Current-tab rows win over history rows for the same combination.
+        History is the primary source (user manually maintains correct W/C dates there).
+        Gap/current only supplements with weeks that are NOT already in history.
+        Falls back to current-only if history is empty or has bad Site_Keys.
         """
-        parts = []
-        if not hist_df.empty and _has_valid_site_keys(hist_df):
-            parts.append(hist_df)   # history first
-        if not cur_df.empty:
-            parts.append(cur_df)    # current last → wins dedup (keep="last")
-        if not parts:
-            return pd.DataFrame()
-        combined = pd.concat(parts, ignore_index=True)
-        if dedup_cols:
-            _dc = [c for c in dedup_cols if c in combined.columns]
-            if _dc:
-                combined = combined.drop_duplicates(subset=_dc, keep="last")
-        return combined
+        hist_ok = not hist_df.empty and _has_valid_site_keys(hist_df)
+        if not hist_ok:
+            return cur_df  # no usable history → just use current tab
+        if cur_df.empty:
+            return hist_df
+        # Find weeks in current that are NOT covered by history
+        _hist_wks = set(hist_df.get("Week_Commencing", pd.Series()).dropna().astype(str).unique())
+        if "Week_Commencing" in cur_df.columns:
+            _cur_new = cur_df[~cur_df["Week_Commencing"].astype(str).isin(_hist_wks)]
+        else:
+            _cur_new = pd.DataFrame()
+        if _cur_new.empty:
+            return hist_df  # history already covers all weeks in current
+        return pd.concat([hist_df, _cur_new], ignore_index=True)
 
-    # Compliance Gap: combine current week + all prior weeks from history
-    _comp_cur  = _read_tab("Compliance Gap")
-    time.sleep(1)
+    # Compliance data: History is primary (all manually-corrected weeks)
     _comp_hist = _read_tab("Compliance History", tail_rows=HISTORY_TAIL)
     time.sleep(1)
-    out["Compliance Gap"] = _combine_with_history(
-        _comp_cur, _comp_hist,
-        dedup_cols=["Site_Key", "SKU", "Week_Commencing"],
-    )
-
-    # Site Summary: same
-    _ss_cur  = _read_tab("Site Summary")
+    _comp_cur  = _read_tab("Compliance Gap")
     time.sleep(1)
+    out["Compliance Gap"] = _merge_cur_hist(_comp_cur, _comp_hist)
+
+    # Site Summary: same logic
     _ss_hist = _read_tab("Site Summary History", tail_rows=HISTORY_TAIL)
     time.sleep(1)
-    out["Site Summary"] = _combine_with_history(
-        _ss_cur, _ss_hist,
-        dedup_cols=["Site_Key", "Week_Commencing"],
-    )
+    _ss_cur  = _read_tab("Site Summary")
+    time.sleep(1)
+    out["Site Summary"] = _merge_cur_hist(_ss_cur, _ss_hist)
 
     for tab in ["Ingredient Requirements", "Run Log"]:
         out[tab] = _read_tab(tab)
