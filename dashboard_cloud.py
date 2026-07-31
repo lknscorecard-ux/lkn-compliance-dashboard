@@ -214,6 +214,12 @@ for c in _num_site:
     if c in site_summ.columns:
         site_summ[c] = pd.to_numeric(site_summ[c], errors="coerce").fillna(0)
 
+# Recompute Compliance % from Total_SKUs so existing history data is also correct
+if all(c in site_summ.columns for c in ["Surplus", "Exact", "Total_SKUs"]):
+    _comp = site_summ["Surplus"] + site_summ["Exact"]
+    _tot  = site_summ["Total_SKUs"].replace(0, float("nan"))
+    site_summ["Compliance_%"] = (_comp / _tot * 100).round(1).fillna(0)
+
 for c in ["Total_Raw_Qty", "Total_Cost"]:
     if c in ingredient_s.columns:
         ingredient_s[c] = pd.to_numeric(ingredient_s[c], errors="coerce").fillna(0)
