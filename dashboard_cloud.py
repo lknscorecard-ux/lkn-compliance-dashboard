@@ -501,7 +501,16 @@ _FOOD_SKUS = set(_SKU_NAME_MAP.keys())
 _wc_col_exists = "Week_Commencing" in compliance.columns
 _all_weeks = []
 if _wc_col_exists:
-    _all_weeks = sorted(compliance["Week_Commencing"].dropna().unique().tolist(), reverse=True)
+    _all_weeks = sorted(
+        [w for w in compliance["Week_Commencing"].dropna().unique() if str(w).strip()],
+        reverse=True,
+    )
+# Debug: show what weeks loaded (remove once confirmed working)
+with st.expander("🔍 Data debug — weeks loaded", expanded=False):
+    st.write(f"Compliance rows total: {len(compliance)}")
+    st.write(f"Weeks found: {_all_weeks}")
+    if "Week_Commencing" in compliance.columns:
+        st.write(compliance["Week_Commencing"].value_counts().to_dict())
 
 if _wc_col_exists and len(_all_weeks) >= 1:
     sel_week = st.selectbox(

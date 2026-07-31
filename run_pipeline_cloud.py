@@ -479,9 +479,28 @@ def main():
         log.warning("  Case enrichment skipped: %s", _e)
 
     # ── Week commencing tag ───────────────────────────────────────────────────
+    # Derive from Bidfood delivery/order dates so that each uploaded file gets
+    # its own correct week regardless of when the pipeline was run.
     from datetime import timedelta
     _run_dt = datetime.now(timezone.utc)
-    _wc = (_run_dt - timedelta(days=_run_dt.weekday() + 7)).strftime("%Y-%m-%d")  # previous Monday
+    _wc = None
+    for _date_col in ["Delivery Date", "Order Date"]:
+        if _date_col in bf_lkn.columns:
+            _dates = pd.to_datetime(
+                bf_lkn[_date_col], errors="coerce", dayfirst=True
+            ).dropna()
+            if not _dates.empty:
+                # Monday of the most common delivery week
+                _mondays = (_dates - _dates.dt.to_series().apply(
+                    lambda d: timedelta(days=d.weekday())
+                ))
+                _wc = _mondays.mode()[0].strftime("%Y-%m-%d")
+                log.info("  Week commencing derived from %s: %s", _date_col, _wc)
+                break
+    if _wc is None:
+        # Fallback: Monday of the previous calendar week (run-date based)
+        _wc = (_run_dt - timedelta(days=_run_dt.weekday() + 7)).strftime("%Y-%m-%d")
+        log.info("  Week commencing (run-date fallback): %s", _wc)
     compliance.insert(0, "Week_Commencing", _wc)
     site_summ.insert(0, "Week_Commencing", _wc)
 
