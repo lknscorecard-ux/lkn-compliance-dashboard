@@ -224,6 +224,7 @@ def packaging_compliance(
     site_raw: pd.DataFrame,
     site_packaging: pd.DataFrame,
     store_site_map: dict | None = None,
+    opening_stock: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Compute packaging compliance: Opalion orders vs Recipe Builder requirements.
@@ -244,7 +245,8 @@ def packaging_compliance(
     _logger = _log.getLogger(__name__)
 
     COLS = ["Site_Key", "SKU", "Ingredient", "Product_Name",
-            "Required_Units", "Ordered_Units", "Gap", "Status"]
+            "Opening_Units", "Required_Units", "Ordered_Units",
+            "Gap", "Closing_Units", "Status"]
 
     if site_raw.empty or site_packaging.empty:
         return pd.DataFrame(columns=COLS)
@@ -256,7 +258,7 @@ def packaging_compliance(
     pkg_req_raw = site_raw[opal_mask].copy()
 
     if pkg_req_raw.empty:
-        _logger.warning("  packaging_compliance: no Opalion rows found in site_raw (check Supplier column)")
+        _logger.warning("  packaging_compliance: no Opalion rows in site_raw (check Supplier column)")
         return pd.DataFrame(columns=COLS)
 
     # Aggregate required units per Store + SKU
@@ -268,23 +270,18 @@ def packaging_compliance(
         .rename(columns={"Store": "Store_Name"})
     )
 
-    # Resolve Store_Name → Site_Key using store_site_map (same logic as engine_compliance.run)
+    # Resolve Store_Name → Site_Key
     pkg_req["Site_Key"] = pkg_req["Store_Name"].map(store_site_map or {})
-    # Fallback: use Store_Name itself if no mapping found
     pkg_req["Site_Key"] = pkg_req["Site_Key"].fillna(pkg_req["Store_Name"])
 
-    # Aggregate required per Site_Key + SKU (a site may run multiple brands)
     req_agg = (
         pkg_req
         .groupby(["Site_Key", "SKU", "Ingredient"], dropna=False)
         .agg(Required_Units=("Required_Units", "sum"))
         .reset_index()
     )
-
-    _logger.info(
-        "  packaging_compliance: %d req rows across %d sites",
-        len(req_agg), req_agg["Site_Key"].nunique(),
-    )
+    _logger.info("  packaging_compliance: %d req rows | %d sites",
+                 len(req_agg), req_agg["Site_Key"].nunique())
 
     # ── Aggregate ordered units per Site_Key + SKU ────────────────────────────
     ord_agg = (
@@ -299,14 +296,39 @@ def packaging_compliance(
 
     pkg_comp["Required_Units"] = pd.to_numeric(pkg_comp["Required_Units"], errors="coerce").fillna(0)
     pkg_comp["Ordered_Units"]  = pd.to_numeric(pkg_comp["Ordered_Units"],  errors="coerce").fillna(0)
-    pkg_comp["Gap"]    = pkg_comp["Ordered_Units"] - pkg_comp["Required_Units"]
+
+    # ── Opening stock carry-forward (previous week's closing units) ───────────
+    pkg_comp["Opening_Units"] = 0.0
+    if opening_stock is not None and not opening_stock.empty:
+        _os = opening_stock.copy()
+        _os["Site_Key"] = _os["Site_Key"].astype(str).str.strip()
+        _os["SKU"]      = _os["SKU"].astype(str).str.strip()
+        _os_map = _os.groupby(["Site_Key", "SKU"])["Closing_Units"].sum().to_dict()
+        pkg_comp["Opening_Units"] = pkg_comp.apply(
+            lambda r: float(_os_map.get(
+                (str(r["Site_Key"]).strip(), str(r["SKU"]).strip()), 0.0
+            )),
+            axis=1,
+        )
+        _matched = int((pkg_comp["Opening_Units"] > 0).sum())
+        _logger.info("  Packaging opening stock applied to %d rows", _matched)
+
+    # Gap = (Ordered + Opening) − Required
+    pkg_comp["Gap"] = (
+        pkg_comp["Ordered_Units"] + pkg_comp["Opening_Units"]
+    ) - pkg_comp["Required_Units"]
+
+    # Closing stock = surplus units carried to next week (≥ 0)
+    pkg_comp["Closing_Units"] = pkg_comp["Gap"].clip(lower=0).round(0)
+
+    # Compliant if gap ≥ 0 (enough stock ordered + carry-forward)
     pkg_comp["Status"] = pkg_comp["Gap"].apply(
-        lambda g: "Surplus" if g > 0 else ("Deficit" if g < 0 else "Exact")
+        lambda g: "Compliant" if g >= 0 else "Non-Compliant"
     )
 
     # Fill display columns
-    if "Ingredient"    not in pkg_comp.columns: pkg_comp["Ingredient"]    = ""
-    if "Product_Name"  not in pkg_comp.columns: pkg_comp["Product_Name"]  = ""
+    if "Ingredient"   not in pkg_comp.columns: pkg_comp["Ingredient"]   = ""
+    if "Product_Name" not in pkg_comp.columns: pkg_comp["Product_Name"] = ""
     pkg_comp["Ingredient"]   = pkg_comp["Ingredient"].fillna(pkg_comp.get("Recipe_Name", ""))
     pkg_comp["Product_Name"] = pkg_comp["Product_Name"].fillna("")
 
@@ -315,33 +337,25 @@ def packaging_compliance(
             pkg_comp[c] = ""
 
     _logger.info(
-        "  packaging_compliance: %d result rows | Surplus %d | Deficit %d | Exact %d",
+        "  packaging_compliance: %d rows | Compliant %d | Non-Compliant %d",
         len(pkg_comp),
-        int((pkg_comp["Status"] == "Surplus").sum()),
-        int((pkg_comp["Status"] == "Deficit").sum()),
-        int((pkg_comp["Status"] == "Exact").sum()),
+        int((pkg_comp["Status"] == "Compliant").sum()),
+        int((pkg_comp["Status"] == "Non-Compliant").sum()),
     )
 
-    return (
-        pkg_comp[COLS]
-        .sort_values(["Site_Key", "SKU"])
-        .reset_index(drop=True)
-    )
+    return pkg_comp[COLS].sort_values(["Site_Key", "SKU"]).reset_index(drop=True)
 
 
 def packaging_site_summary(pkg_compliance: pd.DataFrame) -> pd.DataFrame:
-    """
-    Summarise packaging compliance at site level.
-    Returns counts of Surplus / Deficit / Exact packaging items per site.
-    """
+    """Summarise packaging compliance at site level."""
     if pkg_compliance.empty:
-        return pd.DataFrame(columns=["Site_Key","Surplus","Deficit","Exact",
-                                     "Total_Items","Compliance_%"])
+        return pd.DataFrame(columns=["Site_Key", "Compliant", "Non-Compliant",
+                                     "Total_Items", "Compliance_%"])
 
     grp = (
         pkg_compliance
         .groupby(["Site_Key", "Status"])
-        .agg(Item_Count=("Ingredient", "nunique"))
+        .agg(Item_Count=("SKU", "nunique"))
         .reset_index()
         .pivot_table(
             index="Site_Key",
@@ -352,11 +366,11 @@ def packaging_site_summary(pkg_compliance: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     grp.columns.name = None
-    for col in ["Surplus", "Deficit", "Exact"]:
+    for col in ["Compliant", "Non-Compliant"]:
         if col not in grp.columns:
             grp[col] = 0
-    grp["Total_Items"]   = grp["Surplus"] + grp["Deficit"] + grp["Exact"]
-    grp["Compliance_%"]  = (
-        (grp["Surplus"] + grp["Exact"]) / grp["Total_Items"].replace(0, 1) * 100
+    grp["Total_Items"]  = grp["Compliant"] + grp["Non-Compliant"]
+    grp["Compliance_%"] = (
+        grp["Compliant"] / grp["Total_Items"].replace(0, 1) * 100
     ).round(1)
     return grp.sort_values("Compliance_%", ascending=True)

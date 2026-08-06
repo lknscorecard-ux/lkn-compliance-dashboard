@@ -216,6 +216,37 @@ def _load_stock_on_hand(gc: gspread.Client, sheet_id: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _load_packaging_stock_on_hand(gc: gspread.Client, sheet_id: str) -> pd.DataFrame:
+    """Load previous week's packaging closing units for carry-forward."""
+    try:
+        sh  = gc.open_by_key(sheet_id)
+        ws  = sh.worksheet("Packaging Stock on Hand")
+        raw = ws.get_all_values()
+        if not raw or len(raw) < 2:
+            log.info("  Packaging Stock on Hand: empty — first run?")
+            return pd.DataFrame()
+        df = pd.DataFrame(raw[1:], columns=raw[0]).fillna("").astype(str)
+        df.columns = df.columns.str.strip()
+        df = df.loc[:, ~df.columns.duplicated()]
+        for c in df.columns:
+            df[c] = df[c].str.strip()
+        if "Closing_Units" not in df.columns:
+            log.warning("  Packaging Stock on Hand: 'Closing_Units' column missing")
+            return pd.DataFrame()
+        df["Closing_Units"] = pd.to_numeric(df["Closing_Units"], errors="coerce").fillna(0)
+        if "SKU"      in df.columns: df["SKU"]      = df["SKU"].str.strip()
+        if "Site_Key" in df.columns: df["Site_Key"] = df["Site_Key"].str.strip()
+        log.info("  Packaging Stock on Hand: %d rows (non-zero: %d)",
+                 len(df), int((df["Closing_Units"] > 0).sum()))
+        return df
+    except gspread.exceptions.WorksheetNotFound:
+        log.info("  Packaging Stock on Hand: tab not found — first run")
+        return pd.DataFrame()
+    except Exception as _e:
+        log.warning("  Packaging Stock on Hand: failed (%s) — zero opening stock", _e)
+        return pd.DataFrame()
+
+
 def _append_run_log(gc, sheet_id, run_ts, found, stats):
     sh  = gc.open_by_key(sheet_id)
     try:
@@ -598,17 +629,19 @@ def main():
                 mapping_df,
                 opalion_sku_mapping_df,
             )
-            log.info(
-                "  Opalion: %d site×SKU rows | %d unmatched rows",
-                len(site_packaging), len(_opal_unmatched),
-            )
+            log.info("  Opalion: %d site×SKU rows | %d unmatched rows",
+                     len(site_packaging), len(_opal_unmatched))
             if not site_packaging.empty:
-                pkg_compliance = engine_compliance.packaging_compliance(site_raw_all, site_packaging, store_site_map=_store_site_map)
-                pkg_site_summ  = engine_compliance.packaging_site_summary(pkg_compliance)
-                log.info(
-                    "  Packaging compliance: %d rows | %d sites",
-                    len(pkg_compliance), len(pkg_site_summ),
+                # Load previous week's closing packaging units for carry-forward
+                _pkg_opening = _load_packaging_stock_on_hand(gc, results_id)
+                pkg_compliance = engine_compliance.packaging_compliance(
+                    site_raw_all, site_packaging,
+                    store_site_map=_store_site_map,
+                    opening_stock=_pkg_opening if not _pkg_opening.empty else None,
                 )
+                pkg_site_summ = engine_compliance.packaging_site_summary(pkg_compliance)
+                log.info("  Packaging compliance: %d rows | %d sites",
+                         len(pkg_compliance), len(pkg_site_summ))
         except Exception as _pkg_err:
             log.warning("  Packaging compliance failed: %s — skipping", _pkg_err)
     elif opalion_df is not None:
@@ -640,6 +673,19 @@ def main():
         _upsert_tab(gc, results_id, "Packaging Compliance",   pkg_compliance,  _wc)
         _upsert_tab(gc, results_id, "Packaging Site Summary", pkg_site_summ,   _wc)
         _write_tab(gc,  results_id, "Packaging Products",     pkg_sku_summary)
+        # Save closing units → next week's opening stock (carry-forward)
+        _pkg_soh_cols = [c for c in ["Site_Key","SKU","Ingredient","Closing_Units","Week_Commencing"]
+                         if c in pkg_compliance.columns]
+        _pkg_soh = (
+            pkg_compliance[_pkg_soh_cols]
+            .groupby(["Site_Key","SKU"], as_index=False)
+            .agg(Ingredient=("Ingredient","first"),
+                 Closing_Units=("Closing_Units","sum"),
+                 Week_Commencing=("Week_Commencing","first"))
+        )
+        _pkg_soh["Closing_Units"] = pd.to_numeric(_pkg_soh["Closing_Units"], errors="coerce").fillna(0).round(0)
+        _write_tab(gc, results_id, "Packaging Stock on Hand", _pkg_soh)
+        log.info("  Packaging Stock on Hand: %d rows saved", len(_pkg_soh))
 
     stats = {
         "sites":           site_summ.shape[0],
