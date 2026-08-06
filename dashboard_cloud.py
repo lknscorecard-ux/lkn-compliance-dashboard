@@ -554,7 +554,7 @@ if not site_summ.empty and "Compliance_%" in site_summ.columns:
 st.divider()
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["📊 Overview", "🏪 Sites", "📦 Packaging (Opalion)"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🏪 Sites", "📦 Packaging (Opalion)", "📦 Packaging Detail"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — Overview
@@ -1242,76 +1242,187 @@ with tab3:
         else:
             st.info("No packaging site summary data.")
 
-        st.divider()
+        # Detail is in the Packaging Detail tab (tab4)
 
-        # ── SKU-level detail ───────────────────────────────────────────────────
-        st.subheader("Packaging Item Detail")
-        if not pkg_comp.empty:
-            # Enrich: SKU Name + Account Manager
-            if "SKU" in pkg_comp.columns:
-                pkg_comp["SKU Name"] = pkg_comp["SKU"].map(_PKG_SKU_NAME_MAP).fillna(
-                    pkg_comp.get("Ingredient", ""))
-            if _pkg_am_map and "Site_Key" in pkg_comp.columns:
-                pkg_comp["Account Manager"] = pkg_comp["Site_Key"].map(_pkg_am_map).fillna("—")
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — Packaging Detail (Opalion) — mirrors tab2 Bidfood Sites
+# ══════════════════════════════════════════════════════════════════════════════
+with tab4:
+    st.subheader("Packaging Compliance Detail")
 
-            # Filters (4 across: Status / Account Manager / Site / SKU)
-            _pf1, _pf2, _pf3, _pf4 = st.columns(4)
-            with _pf1:
-                _pkg_status_sel = st.selectbox(
-                    "Status", ["All", "Non-Compliant", "Compliant"], key="pkg_status_filter"
-                )
-            with _pf2:
-                _am_opts = ["All"] + sorted(
-                    pkg_comp["Account Manager"].dropna().unique().tolist()
-                ) if "Account Manager" in pkg_comp.columns else ["All"]
-                _pkg_am_sel = st.selectbox("Account Manager", _am_opts, key="pkg_am_filter")
-            with _pf3:
-                _pkg_sites = ["All"] + sorted(pkg_comp["Site_Key"].dropna().unique().tolist()) \
-                    if "Site_Key" in pkg_comp.columns else ["All"]
-                _pkg_site_sel = st.selectbox("Site", _pkg_sites, key="pkg_site_filter")
-            with _pf4:
-                _pkg_skus = ["All"] + sorted(pkg_comp["SKU"].dropna().unique().tolist()) \
-                    if "SKU" in pkg_comp.columns else ["All"]
-                _pkg_sku_sel = st.selectbox("SKU", _pkg_skus, key="pkg_sku_filter")
+    # Reload pkg_comp for this tab (tab3 may have mutated it)
+    _pd_comp = _safe("Packaging Compliance")
+    _pd_summ = _safe("Packaging Site Summary")
 
-            _pkg_detail = pkg_comp.copy()
-            if _pkg_status_sel != "All" and "Status" in _pkg_detail.columns:
-                _pkg_detail = _pkg_detail[_pkg_detail["Status"] == _pkg_status_sel]
-            if _pkg_am_sel != "All" and "Account Manager" in _pkg_detail.columns:
-                _pkg_detail = _pkg_detail[_pkg_detail["Account Manager"] == _pkg_am_sel]
-            if _pkg_site_sel != "All" and "Site_Key" in _pkg_detail.columns:
-                _pkg_detail = _pkg_detail[_pkg_detail["Site_Key"] == _pkg_site_sel]
-            if _pkg_sku_sel != "All" and "SKU" in _pkg_detail.columns:
-                _pkg_detail = _pkg_detail[_pkg_detail["SKU"] == _pkg_sku_sel]
+    if not _pd_comp.empty and "Week_Commencing" in _pd_comp.columns and "sel_week" in dir():
+        _pd_comp = _pd_comp[_pd_comp["Week_Commencing"] == sel_week]
+    if not _pd_summ.empty and "Week_Commencing" in _pd_summ.columns and "sel_week" in dir():
+        _pd_summ = _pd_summ[_pd_summ["Week_Commencing"] == sel_week]
 
-            # Build display version with friendly column names
-            _pkg_col_rename = {
-                "Opening_Units":  "Opening Stock (Carry-forward)",
-                "Required_Units": "Stock Used",
-                "Ordered_Units":  "Stock Ordered from Opalion",
-                "Gap":            "Ordered vs Used (Variance)",
-                "Closing_Units":  "Closing Stock",
-            }
-            _pkg_display_cols = []
-            for c in ["Week_Commencing", "Site_Key", "Account Manager", "SKU", "SKU Name",
-                      "Ingredient", "Product_Name", "Opening_Units", "Required_Units",
-                      "Ordered_Units", "Gap", "Closing_Units", "Status"]:
-                if c in _pkg_detail.columns:
-                    _pkg_display_cols.append(c)
-            _pkg_detail_disp = _pkg_detail[_pkg_display_cols].rename(columns=_pkg_col_rename)
+    # Normalise old status labels
+    if not _pd_comp.empty and "Status" in _pd_comp.columns:
+        _pd_comp["Status"] = _pd_comp["Status"].replace(
+            {"Surplus": "Compliant", "Exact": "Compliant", "Deficit": "Non-Compliant"}
+        )
+    if not _pd_summ.empty:
+        if "Surplus" in _pd_summ.columns or "Deficit" in _pd_summ.columns:
+            _s = pd.to_numeric(_pd_summ.get("Surplus", 0), errors="coerce").fillna(0)
+            _e = pd.to_numeric(_pd_summ.get("Exact",   0), errors="coerce").fillna(0)
+            _d = pd.to_numeric(_pd_summ.get("Deficit", 0), errors="coerce").fillna(0)
+            _pd_summ["Compliant"]     = _s + _e
+            _pd_summ["Non-Compliant"] = _d
+            _pd_summ = _pd_summ.drop(
+                columns=[c for c in ["Surplus", "Deficit", "Exact"] if c in _pd_summ.columns]
+            )
+            _pd_summ["Total_Items"]  = _pd_summ["Compliant"] + _pd_summ["Non-Compliant"]
+            _pd_summ["Compliance_%"] = (
+                _pd_summ["Compliant"] / _pd_summ["Total_Items"].replace(0, 1) * 100
+            ).round(1)
 
-            # Colour by Status
-            def _pkg_row_colour(row):
-                s = row.get("Status", "")
-                if s == "Compliant":     return ["background-color:#e8f5e9"] * len(row)
-                if s == "Non-Compliant": return ["background-color:#ffebee"] * len(row)
-                return [""] * len(row)
+    # Account Manager map (Site_Key → AM)
+    _pd_am_map: dict = {}
+    if not _site_mapping.empty and "Site Key" in _site_mapping.columns:
+        _am_col4 = next((c for c in _site_mapping.columns if "account manager" in c.lower()), None)
+        if _am_col4:
+            _pd_am_map = (
+                _site_mapping.set_index("Site Key")[_am_col4]
+                .replace("", pd.NA).dropna().to_dict()
+            )
 
-            _pkg_detail_styled = _pkg_detail_disp.style.apply(_pkg_row_colour, axis=1)
-            st.dataframe(_pkg_detail_styled, use_container_width=True, height=500)
-            st.caption(f"{len(_pkg_detail_disp):,} rows")
-            st.download_button("⬇ Download Packaging Detail",
-                               data=_to_csv(_pkg_detail_disp),
-                               file_name="packaging_compliance_detail.csv", mime="text/csv")
+    if _pd_comp.empty:
+        st.info("No packaging data yet. Run the pipeline to populate this tab.")
+    else:
+        # Enrich with AM
+        if _pd_am_map and "Site_Key" in _pd_comp.columns:
+            _pd_comp["_AM"] = _pd_comp["Site_Key"].map(_pd_am_map).fillna("Unassigned")
         else:
-            st.info("No packaging item detail available.")
+            _pd_comp["_AM"] = "Unassigned"
+
+        _all_ams = sorted(_pd_comp["_AM"].dropna().unique().tolist())
+
+        # SKU label map
+        _pd_sku_labels = sorted([
+            f"{sku} — {_SKU_NAME_MAP.get(sku, sku)}"
+            for sku in _pd_comp["SKU"].dropna().unique()
+        ]) if "SKU" in _pd_comp.columns else []
+        _pd_label_to_sku = {lbl: lbl.split(" — ")[0] for lbl in _pd_sku_labels}
+
+        # ── Filters ──────────────────────────────────────────────────────────
+        _pdc1, _pdc2, _pdc3, _pdc4 = st.columns(4)
+        with _pdc1:
+            _pd_sel_am = st.multiselect(
+                "Account Manager", _all_ams,
+                placeholder="Filter by account manager…",
+                key="pkg_detail_am_filter",
+            )
+        # Scope site dropdown to selected AM
+        if _pd_sel_am:
+            _pd_am_sites = {sk for sk, am in _pd_am_map.items() if am in _pd_sel_am}
+            _pd_site_opts = sorted(
+                _pd_comp[_pd_comp["Site_Key"].isin(_pd_am_sites)]["Site_Key"]
+                .dropna().unique().tolist()
+            )
+        else:
+            _pd_site_opts = sorted(_pd_comp["Site_Key"].dropna().unique().tolist())
+
+        with _pdc2:
+            _pd_sel_sites = st.multiselect(
+                "Site", _pd_site_opts,
+                placeholder="Type site name…",
+                key="pkg_detail_site_filter",
+            )
+        with _pdc3:
+            _pd_sel_status = st.selectbox(
+                "Status", ["All", "Non-Compliant", "Compliant"],
+                key="pkg_detail_status_filter",
+            )
+        with _pdc4:
+            _pd_sel_skus = st.multiselect(
+                "SKU / Item", _pd_sku_labels,
+                placeholder="Search by SKU…",
+                key="pkg_detail_sku_filter",
+            )
+
+        # Apply filters
+        _pd_disp = _pd_comp.copy()
+        if _pd_sel_am:
+            _pd_disp = _pd_disp[_pd_disp["_AM"].isin(_pd_sel_am)]
+        if _pd_sel_sites:
+            _pd_disp = _pd_disp[_pd_disp["Site_Key"].isin(_pd_sel_sites)]
+        if _pd_sel_status != "All":
+            _pd_disp = _pd_disp[_pd_disp["Status"] == _pd_sel_status]
+        if _pd_sel_skus:
+            _pd_skus_sel = [_pd_label_to_sku[l] for l in _pd_sel_skus if l in _pd_label_to_sku]
+            _pd_disp = _pd_disp[_pd_disp["SKU"].isin(_pd_skus_sel)]
+
+        # ── AM-level KPI panel (shown when AM filter active) ─────────────────
+        if _pd_sel_am:
+            _pd_filtered_sites = _pd_disp["Site_Key"].unique()
+            _pd_ss_f = (
+                _pd_summ[_pd_summ["Site_Key"].astype(str).isin(_pd_filtered_sites)].copy()
+                if not _pd_summ.empty else pd.DataFrame()
+            )
+            _pd_f_total  = _pd_ss_f.shape[0]
+            _pd_f_comp   = int(
+                (pd.to_numeric(_pd_ss_f.get("Compliance_%", pd.Series()), errors="coerce") >= 70).sum()
+            ) if not _pd_ss_f.empty else 0
+            _pd_f_nc     = _pd_f_total - _pd_f_comp
+            _pd_f_avg    = round(
+                pd.to_numeric(_pd_ss_f.get("Compliance_%", pd.Series()), errors="coerce").mean(), 1
+            ) if not _pd_ss_f.empty else 0.0
+
+            st.divider()
+            st.caption(f"📊 KPIs for: **Account Manager: {', '.join(_pd_sel_am)}**")
+            _pk1, _pk2, _pk3, _pk4 = st.columns(4)
+            _pk1.metric("Sites",              _pd_f_total)
+            _pk2.metric("Avg Compliance",     f"{_pd_f_avg:.1f}%")
+            _pk3.metric("Compliant (≥70%)",   _pd_f_comp,
+                        delta=f"{_pd_f_comp} of {_pd_f_total}", delta_color="normal")
+            _pk4.metric("Non-Compliant",      _pd_f_nc,
+                        delta=f"{_pd_f_nc} need attention" if _pd_f_nc else "All clear",
+                        delta_color="inverse" if _pd_f_nc else "off")
+            st.divider()
+
+        # ── Detail table ──────────────────────────────────────────────────────
+        _pd_col_rename = {
+            "Site_Key":       "Site",
+            "Opening_Units":  "Opening Stock (Carry-forward)",
+            "Required_Units": "Stock Used",
+            "Ordered_Units":  "Stock Ordered from Opalion",
+            "Gap":            "Ordered vs Used (Variance)",
+            "Closing_Units":  "Closing Stock",
+        }
+        # Only show these columns — AM/Ingredient/Product_Name excluded
+        _pd_show_raw = [c for c in [
+            "Week_Commencing", "Site_Key", "SKU",
+            "Opening_Units", "Required_Units", "Ordered_Units",
+            "Gap", "Closing_Units", "Status",
+        ] if c in _pd_disp.columns]
+
+        _pd_disp_show = _pd_disp[_pd_show_raw].rename(columns=_pd_col_rename)
+
+        def _pd_status_bg(val):
+            return {"Compliant": "background-color:#E5F5E0",
+                    "Non-Compliant": "background-color:#FFE8E8"}.get(val, "")
+
+        _pd_styled = _pd_disp_show.style
+        if "Status" in _pd_disp_show.columns:
+            _pd_styled = _pd_styled.map(_pd_status_bg, subset=["Status"])
+
+        # Format numerics
+        _pd_num_cols = [_pd_col_rename.get(c, c) for c in
+                        ["Opening_Units", "Required_Units", "Ordered_Units", "Gap", "Closing_Units"]
+                        if _pd_col_rename.get(c, c) in _pd_disp_show.columns]
+        _pd_styled = _pd_styled.format(
+            {c: "{:.2f}" for c in _pd_num_cols}, na_rep="—"
+        )
+
+        st.dataframe(_pd_styled, use_container_width=True, height=520)
+        st.caption(f"{len(_pd_disp_show):,} rows shown")
+        st.download_button(
+            "⬇ Download Packaging Detail (CSV)",
+            data=_to_csv(_pd_disp_show),
+            file_name="packaging_compliance_detail.csv",
+            mime="text/csv",
+            key="pkg_detail_download",
+        )
