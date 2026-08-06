@@ -203,10 +203,26 @@ def run(matched_df: pd.DataFrame, rb_xl_path: str) -> tuple:
     unmatched_sales = results[results["Menu_Item_Name"].isna()].copy()
 
     # ── Join with Recipe Builder ingredients ──────────────────────────────────
-    detail = matched_sales.merge(
-        rb[["Menu Item Name","Ingredient","Qty_new","UOM_new","SKU Code","Supplier","Storage Type","Cost"]],
-        left_on="Menu_Item_Name", right_on="Menu Item Name", how="left"
+    # Join on Brand + Menu Item Name so that e.g. Hot Chick sales only pick up
+    # Hot Chick packaging SKUs, not Twisted London / Wing Fest ones for the same
+    # menu item name. _brand in rb must match Brand in sales.
+    # Fallback: rows whose Brand has no matching _brand in rb (e.g. unbranded or
+    # mis-mapped) fall back to a name-only join so they are not silently dropped.
+    _rb_cols = ["_brand","Menu Item Name","Ingredient","Qty_new","UOM_new","SKU Code","Supplier","Storage Type","Cost"]
+    _branded   = matched_sales[matched_sales["Brand"].isin(rb["_brand"].unique())].copy()
+    _unbranded = matched_sales[~matched_sales["Brand"].isin(rb["_brand"].unique())].copy()
+
+    detail_branded = _branded.merge(
+        rb[_rb_cols],
+        left_on=["Brand", "Menu_Item_Name"],
+        right_on=["_brand", "Menu Item Name"],
+        how="left",
     )
+    detail_unbranded = _unbranded.merge(
+        rb[[c for c in _rb_cols if c != "_brand"]],
+        left_on="Menu_Item_Name", right_on="Menu Item Name", how="left",
+    )
+    detail = pd.concat([detail_branded, detail_unbranded], ignore_index=True)
 
     no_recipe  = detail[detail["Ingredient"].isna() | (detail["Ingredient"] == "")]
     has_recipe = detail[detail["Ingredient"].notna() & (detail["Ingredient"] != "")].copy()
