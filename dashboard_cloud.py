@@ -1200,7 +1200,8 @@ with tab3:
                 except Exception:
                     return ""
 
-            _pkg_styled = _pkg_disp.style.applymap(
+            _style_fn = getattr(_pkg_disp.style, "map", None) or getattr(_pkg_disp.style, "applymap")
+            _pkg_styled = _style_fn(
                 _pkg_colour, subset=["Compliance_%"] if "Compliance_%" in _pkg_disp.columns else []
             )
             st.dataframe(_pkg_styled, use_container_width=True, height=400)
