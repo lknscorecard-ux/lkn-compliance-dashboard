@@ -1186,10 +1186,8 @@ with tab3:
                 _pkg_disp[c] = pd.to_numeric(_pkg_disp[c], errors="coerce").fillna(
                     _pkg_disp[c]) if c not in ["Site_Key","Store_Name"] else _pkg_disp[c]
             if "Compliance_%" in _pkg_disp.columns:
-                _pkg_disp = _pkg_disp.sort_values(
-                    pd.to_numeric(_pkg_disp["Compliance_%"], errors="coerce"),
-                    ascending=False,
-                ).reset_index(drop=True)
+                _pkg_disp["Compliance_%"] = pd.to_numeric(_pkg_disp["Compliance_%"], errors="coerce")
+                _pkg_disp = _pkg_disp.sort_values("Compliance_%", ascending=False).reset_index(drop=True)
                 _pkg_disp.insert(0, "Rank", range(1, len(_pkg_disp) + 1))
 
             # Status colour
