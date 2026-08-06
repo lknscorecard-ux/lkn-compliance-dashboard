@@ -312,7 +312,9 @@ def main():
 
     # ── [3/6] Load Drop Account Mapping (live Google Sheet) ───────────────────
     log.info("[3/6] Loading Drop Account Mapping from Google Sheets ...")
-    mapping_ws = gc.open_by_key(mapping_id).worksheet("Site Mapping")
+    _mapping_sh = gc.open_by_key(mapping_id)
+
+    mapping_ws = _mapping_sh.worksheet("Site Mapping")
     _raw = mapping_ws.get_all_values()
     mapping_df = (
         pd.DataFrame(_raw[1:], columns=_raw[0]).fillna("").astype(str)
@@ -329,6 +331,18 @@ def main():
         log.info("  Mapping: %d sites loaded (%d excluded — Required≠YES)", len(mapping_df), _before - len(mapping_df))
     else:
         log.info("  Mapping: %d sites loaded", len(mapping_df))
+
+    # Load Opalion SKU Mapping 2 tab (product name → SKU + cases per unit)
+    opalion_sku_mapping_df = pd.DataFrame()
+    try:
+        _opal_ws  = _mapping_sh.worksheet("Opalion SKU Mapping 2")
+        _opal_raw = _opal_ws.get_all_values()
+        if _opal_raw and len(_opal_raw) > 1:
+            opalion_sku_mapping_df = pd.DataFrame(_opal_raw[1:], columns=_opal_raw[0]).fillna("").astype(str)
+            opalion_sku_mapping_df.columns = opalion_sku_mapping_df.columns.str.strip()
+            log.info("  Opalion SKU Mapping 2: %d rows loaded", len(opalion_sku_mapping_df))
+    except Exception as _opal_err:
+        log.warning("  Opalion SKU Mapping 2 not found (%s) — packaging SKU matching disabled", _opal_err)
 
     # ── [3b] Seed "Stock on Hand" from previous week's Bidfood file (one-time) ──
     # Upload last week's processed_data renamed to include "stock_seed" in the
@@ -561,10 +575,34 @@ def main():
     _append_history(gc, results_id, "Compliance History",    compliance)
     _append_history(gc, results_id, "Site Summary History",  site_summ)
 
-    # Packaging (Opalion) — disabled; calculated separately
+    # ── Packaging (Opalion) ───────────────────────────────────────────────────
     pkg_compliance  = pd.DataFrame()
     pkg_site_summ   = pd.DataFrame()
     pkg_sku_summary = pd.DataFrame()
+
+    if opalion_df is not None and not opalion_df.empty and not opalion_sku_mapping_df.empty:
+        log.info("         System D — Opalion packaging compliance ...")
+        try:
+            site_packaging, pkg_sku_summary, _opal_unmatched = engine_opalion.run(
+                opalion_df,
+                mapping_df,
+                opalion_sku_mapping_df,
+            )
+            log.info(
+                "  Opalion: %d site×SKU rows | %d unmatched rows",
+                len(site_packaging), len(_opal_unmatched),
+            )
+            if not site_packaging.empty:
+                pkg_compliance = engine_compliance.packaging_compliance(site_raw, site_packaging)
+                pkg_site_summ  = engine_compliance.packaging_site_summary(pkg_compliance)
+                log.info(
+                    "  Packaging compliance: %d rows | %d sites",
+                    len(pkg_compliance), len(pkg_site_summ),
+                )
+        except Exception as _pkg_err:
+            log.warning("  Packaging compliance failed: %s — skipping", _pkg_err)
+    elif opalion_df is not None:
+        log.info("  Opalion file present but SKU mapping empty — skipping packaging")
 
     # ── [6/6] Write results to Google Sheets ──────────────────────────────────
     log.info("[6/6] Writing results to Google Sheets ...")
@@ -587,9 +625,11 @@ def main():
         _write_tab(gc, results_id, "Bidfood Unmatched", bf_unmatched_wc)
         _append_history(gc, results_id, "Bidfood Unmatched History", bf_unmatched_wc)
     if not pkg_compliance.empty:
-        _write_tab(gc, results_id, "Packaging Compliance",  pkg_compliance)
-        _write_tab(gc, results_id, "Packaging Site Summary", pkg_site_summ)
-        _write_tab(gc, results_id, "Packaging Products",     pkg_sku_summary)
+        pkg_compliance.insert(0,  "Week_Commencing", _wc)
+        pkg_site_summ.insert(0,   "Week_Commencing", _wc)
+        _upsert_tab(gc, results_id, "Packaging Compliance",   pkg_compliance,  _wc)
+        _upsert_tab(gc, results_id, "Packaging Site Summary", pkg_site_summ,   _wc)
+        _write_tab(gc,  results_id, "Packaging Products",     pkg_sku_summary)
 
     stats = {
         "sites":           site_summ.shape[0],
