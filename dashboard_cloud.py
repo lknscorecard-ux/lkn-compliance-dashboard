@@ -1399,7 +1399,15 @@ with tab4:
             "Gap", "Closing_Units", "Status",
         ] if c in _pd_disp.columns]
 
-        _pd_disp_show = _pd_disp[_pd_show_raw].rename(columns=_pd_col_rename)
+        _pd_disp_show = _pd_disp[_pd_show_raw].rename(columns=_pd_col_rename).copy()
+
+        # Coerce numeric columns to float so the formatter never sees strings
+        _pd_num_display_cols = [_pd_col_rename.get(c, c) for c in
+                                ["Opening_Units", "Required_Units", "Ordered_Units",
+                                 "Gap", "Closing_Units"]]
+        for _c in _pd_num_display_cols:
+            if _c in _pd_disp_show.columns:
+                _pd_disp_show[_c] = pd.to_numeric(_pd_disp_show[_c], errors="coerce")
 
         def _pd_status_bg(val):
             return {"Compliant": "background-color:#E5F5E0",
@@ -1409,13 +1417,11 @@ with tab4:
         if "Status" in _pd_disp_show.columns:
             _pd_styled = _pd_styled.map(_pd_status_bg, subset=["Status"])
 
-        # Format numerics
-        _pd_num_cols = [_pd_col_rename.get(c, c) for c in
-                        ["Opening_Units", "Required_Units", "Ordered_Units", "Gap", "Closing_Units"]
-                        if _pd_col_rename.get(c, c) in _pd_disp_show.columns]
-        _pd_styled = _pd_styled.format(
-            {c: "{:.2f}" for c in _pd_num_cols}, na_rep="—"
-        )
+        _pd_fmt_cols = [c for c in _pd_num_display_cols if c in _pd_disp_show.columns]
+        if _pd_fmt_cols:
+            _pd_styled = _pd_styled.format(
+                {c: lambda v: "—" if pd.isna(v) else f"{v:.2f}" for c in _pd_fmt_cols}
+            )
 
         st.dataframe(_pd_styled, use_container_width=True, height=520)
         st.caption(f"{len(_pd_disp_show):,} rows shown")
