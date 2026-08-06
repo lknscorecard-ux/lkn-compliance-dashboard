@@ -1190,12 +1190,12 @@ with tab3:
                 _pkg_nc = pkg_comp[pkg_comp["Status"] == "Non-Compliant"].copy()
                 if not _pkg_nc.empty and "Ingredient" in _pkg_nc.columns:
                     _pkg_nc["Gap"] = pd.to_numeric(_pkg_nc.get("Gap", 0), errors="coerce")
-                    _pkg_top = (
+                    _pkg_top_nc = (
                         _pkg_nc.groupby("Ingredient")["Gap"]
                         .sum().sort_values().head(10).reset_index()
                     )
                     _fig_pkg_bar = px.bar(
-                        _pkg_top, x="Gap", y="Ingredient", orientation="h",
+                        _pkg_top_nc, x="Gap", y="Ingredient", orientation="h",
                         color_discrete_sequence=["#C00000"],
                         labels={"Gap": "Ordered vs Used (Variance)", "Ingredient": ""},
                     )
@@ -1205,6 +1205,24 @@ with tab3:
                     st.success("No non-compliant packaging items this week.")
             else:
                 st.info("No packaging compliance data.")
+
+        # ── Second charts row: Top Compliant Items ────────────────────────────
+        if not pkg_comp.empty and "Status" in pkg_comp.columns:
+            _pkg_c = pkg_comp[pkg_comp["Status"] == "Compliant"].copy()
+            if not _pkg_c.empty and "Ingredient" in _pkg_c.columns:
+                _pkg_c["Gap"] = pd.to_numeric(_pkg_c.get("Gap", 0), errors="coerce")
+                _pkg_top_c = (
+                    _pkg_c.groupby("Ingredient")["Gap"]
+                    .sum().sort_values(ascending=False).head(10).reset_index()
+                )
+                st.subheader("Top Compliant Packaging Items")
+                _fig_pkg_comp = px.bar(
+                    _pkg_top_c, x="Gap", y="Ingredient", orientation="h",
+                    color_discrete_sequence=["#538135"],
+                    labels={"Gap": "Ordered vs Used (Variance)", "Ingredient": ""},
+                )
+                _fig_pkg_comp.update_layout(height=320, margin=dict(t=10, b=0, l=0, r=0))
+                st.plotly_chart(_fig_pkg_comp, use_container_width=True)
 
         st.divider()
 
