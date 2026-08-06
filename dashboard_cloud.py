@@ -187,6 +187,10 @@ def _load_all_sheets() -> dict:
     _bf_hist = _read_tab("Bidfood Stock History", tail_rows=HISTORY_TAIL)
     out["Bidfood Stock"] = _bf_hist if not _bf_hist.empty else _read_tab("Bidfood Stock")
     time.sleep(1)
+    # Opalion packaging tabs (optional — empty if pipeline hasn't written them yet)
+    for tab in ["Packaging Compliance", "Packaging Site Summary"]:
+        out[tab] = _read_tab(tab)
+        time.sleep(1)
     return out
 
 def _safe(tab: str) -> pd.DataFrame:
@@ -550,7 +554,7 @@ if not site_summ.empty and "Compliance_%" in site_summ.columns:
 st.divider()
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab1, tab2 = st.tabs(["📊 Overview", "🏪 Sites"])
+tab1, tab2, tab3 = st.tabs(["📊 Overview", "🏪 Sites", "📦 Packaging (Opalion)"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — Overview
@@ -1076,3 +1080,179 @@ with tab2:
                         st.info("No Bidfood orders for this SKU.")
                 else:
                     st.info("No Bidfood stock data loaded.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — Packaging (Opalion)
+# ══════════════════════════════════════════════════════════════════════════════
+with tab3:
+
+    pkg_comp   = _safe("Packaging Compliance")
+    pkg_summ   = _safe("Packaging Site Summary")
+
+    # Apply W/C filter if the data has it
+    if not pkg_comp.empty and "Week_Commencing" in pkg_comp.columns and "sel_week" in dir():
+        pkg_comp = pkg_comp[pkg_comp["Week_Commencing"] == sel_week]
+    if not pkg_summ.empty and "Week_Commencing" in pkg_summ.columns and "sel_week" in dir():
+        pkg_summ = pkg_summ[pkg_summ["Week_Commencing"] == sel_week]
+
+    if pkg_comp.empty and pkg_summ.empty:
+        st.info(
+            "No packaging data yet. "
+            "Run the pipeline with an Opalion 'Line Item Details' file in your Drive folder "
+            "to populate this tab."
+        )
+    else:
+        # ── KPI row ───────────────────────────────────────────────────────────
+        _pkg_total   = pkg_summ.shape[0] if not pkg_summ.empty else 0
+        _pkg_comp_n  = 0
+        _pkg_avg     = 0.0
+        if not pkg_summ.empty and "Compliance_%" in pkg_summ.columns:
+            _pkg_comp_col = pd.to_numeric(pkg_summ["Compliance_%"], errors="coerce")
+            _pkg_avg      = round(_pkg_comp_col.mean(), 1)
+            _pkg_comp_n   = int((_pkg_comp_col >= 70).sum())
+        _pkg_noncomp = _pkg_total - _pkg_comp_n
+
+        pk1, pk2, pk3, pk4 = st.columns(4)
+        pk1.metric("Sites Tracked",       _pkg_total)
+        pk2.metric("Avg Compliance",      f"{_pkg_avg:.1f}%")
+        pk3.metric("Compliant Sites",     _pkg_comp_n)
+        pk4.metric("Non-Compliant Sites", _pkg_noncomp,
+                   delta=f"{_pkg_noncomp} need attention" if _pkg_noncomp else "All clear",
+                   delta_color="inverse" if _pkg_noncomp else "off")
+        st.divider()
+
+        # ── Charts row ────────────────────────────────────────────────────────
+        ch1, ch2 = st.columns([1, 2])
+
+        with ch1:
+            st.subheader("Site Compliance")
+            if not pkg_summ.empty and "Compliance_%" in pkg_summ.columns:
+                _n_c  = int((pd.to_numeric(pkg_summ["Compliance_%"], errors="coerce") >= 70).sum())
+                _n_nc = _pkg_total - _n_c
+                _fig_pkg_donut = go.Figure(go.Pie(
+                    labels=["Compliant", "Non-Compliant"],
+                    values=[_n_c, _n_nc],
+                    marker_colors=["#538135", "#C00000"],
+                    hole=0.60,
+                    textinfo="label+percent",
+                    hovertemplate="%{label}: %{value} sites<extra></extra>",
+                ))
+                _fig_pkg_donut.update_layout(
+                    height=300,
+                    margin=dict(t=10, b=0, l=0, r=0),
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
+                    annotations=[dict(
+                        text=f"<b>{_pkg_total}</b><br>Sites",
+                        x=0.5, y=0.5, font_size=14, showarrow=False,
+                    )],
+                )
+                st.plotly_chart(_fig_pkg_donut, use_container_width=True)
+            else:
+                st.info("No site summary data.")
+
+        with ch2:
+            st.subheader("Top Deficit Packaging Items")
+            if not pkg_comp.empty and "Status" in pkg_comp.columns:
+                _pkg_deficit = pkg_comp[pkg_comp["Status"] == "Deficit"].copy()
+                if not _pkg_deficit.empty and "Ingredient" in _pkg_deficit.columns:
+                    _pkg_deficit["Gap"] = pd.to_numeric(_pkg_deficit.get("Gap", 0), errors="coerce")
+                    _pkg_top = (
+                        _pkg_deficit.groupby("Ingredient")["Gap"]
+                        .sum()
+                        .sort_values()
+                        .head(10)
+                        .reset_index()
+                    )
+                    _fig_pkg_bar = px.bar(
+                        _pkg_top, x="Gap", y="Ingredient", orientation="h",
+                        color_discrete_sequence=["#C00000"],
+                        labels={"Gap": "Total Deficit (units)", "Ingredient": ""},
+                    )
+                    _fig_pkg_bar.update_layout(height=300, margin=dict(t=10, b=0, l=0, r=0))
+                    st.plotly_chart(_fig_pkg_bar, use_container_width=True)
+                else:
+                    st.success("No packaging deficits this week.")
+            else:
+                st.info("No packaging compliance data.")
+
+        st.divider()
+
+        # ── Site ranking table ─────────────────────────────────────────────────
+        st.subheader("Site Packaging Ranking")
+        if not pkg_summ.empty:
+            _pkg_disp = pkg_summ.copy()
+            for c in _pkg_disp.columns:
+                _pkg_disp[c] = pd.to_numeric(_pkg_disp[c], errors="coerce").fillna(
+                    _pkg_disp[c]) if c not in ["Site_Key","Store_Name"] else _pkg_disp[c]
+            if "Compliance_%" in _pkg_disp.columns:
+                _pkg_disp = _pkg_disp.sort_values(
+                    pd.to_numeric(_pkg_disp["Compliance_%"], errors="coerce"),
+                    ascending=False,
+                ).reset_index(drop=True)
+                _pkg_disp.insert(0, "Rank", range(1, len(_pkg_disp) + 1))
+
+            # Status colour
+            def _pkg_colour(v):
+                try:
+                    f = float(v)
+                    if f >= 90:   return "background-color:#e8f5e9"
+                    if f >= 70:   return "background-color:#fff9c4"
+                    return "background-color:#ffebee"
+                except Exception:
+                    return ""
+
+            _pkg_styled = _pkg_disp.style.applymap(
+                _pkg_colour, subset=["Compliance_%"] if "Compliance_%" in _pkg_disp.columns else []
+            )
+            st.dataframe(_pkg_styled, use_container_width=True, height=400)
+            st.caption(f"{len(_pkg_disp):,} sites")
+            st.download_button(
+                "⬇ Download Site Packaging Summary",
+                data=_to_csv(_pkg_disp),
+                file_name="packaging_site_summary.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("No packaging site summary data.")
+
+        st.divider()
+
+        # ── SKU-level detail ───────────────────────────────────────────────────
+        st.subheader("Packaging Item Detail")
+        if not pkg_comp.empty:
+            # Filters
+            _pf1, _pf2 = st.columns(2)
+            with _pf1:
+                _pkg_status_opts = ["All"] + sorted(pkg_comp["Status"].dropna().unique().tolist()) \
+                    if "Status" in pkg_comp.columns else ["All"]
+                _pkg_status_sel = st.selectbox("Status", _pkg_status_opts, key="pkg_status_filter")
+            with _pf2:
+                _pkg_sites = ["All"] + sorted(pkg_comp["Site_Key"].dropna().unique().tolist()) \
+                    if "Site_Key" in pkg_comp.columns else ["All"]
+                _pkg_site_sel = st.selectbox("Site", _pkg_sites, key="pkg_site_filter")
+
+            _pkg_detail = pkg_comp.copy()
+            if _pkg_status_sel != "All" and "Status" in _pkg_detail.columns:
+                _pkg_detail = _pkg_detail[_pkg_detail["Status"] == _pkg_status_sel]
+            if _pkg_site_sel != "All" and "Site_Key" in _pkg_detail.columns:
+                _pkg_detail = _pkg_detail[_pkg_detail["Site_Key"] == _pkg_site_sel]
+
+            # Colour Status column
+            def _pkg_row_colour(row):
+                s = row.get("Status", "")
+                if s == "Surplus":  return ["background-color:#e8f5e9"] * len(row)
+                if s == "Deficit":  return ["background-color:#ffebee"] * len(row)
+                return [""] * len(row)
+
+            _pkg_detail_styled = _pkg_detail.style.apply(_pkg_row_colour, axis=1)
+            st.dataframe(_pkg_detail_styled, use_container_width=True, height=500)
+            st.caption(f"{len(_pkg_detail):,} rows")
+            st.download_button(
+                "⬇ Download Packaging Detail",
+                data=_to_csv(_pkg_detail),
+                file_name="packaging_compliance_detail.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("No packaging item detail available.")
