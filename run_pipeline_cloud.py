@@ -420,8 +420,10 @@ def main():
         "25788","26214","22667","22668","26222","26227","26229","29053","30003",
         "26364","17339",
     }
-    site_raw   = site_raw[site_raw["SKU"].astype(str).isin(_LKN_FOOD_SKUS)].copy()
-    site_stock = site_stock[site_stock["Product Code"].astype(str).isin(_LKN_FOOD_SKUS)].copy()
+    # Keep full site_raw (food + packaging) for packaging compliance later
+    site_raw_all = site_raw.copy()
+    site_raw     = site_raw[site_raw["SKU"].astype(str).isin(_LKN_FOOD_SKUS)].copy()
+    site_stock   = site_stock[site_stock["Product Code"].astype(str).isin(_LKN_FOOD_SKUS)].copy()
     log.info("  After SKU filter — site_raw: %d rows | site_stock: %d rows",
              len(site_raw), len(site_stock))
 
@@ -601,7 +603,7 @@ def main():
                 len(site_packaging), len(_opal_unmatched),
             )
             if not site_packaging.empty:
-                pkg_compliance = engine_compliance.packaging_compliance(site_raw, site_packaging, store_site_map=_store_site_map)
+                pkg_compliance = engine_compliance.packaging_compliance(site_raw_all, site_packaging, store_site_map=_store_site_map)
                 pkg_site_summ  = engine_compliance.packaging_site_summary(pkg_compliance)
                 log.info(
                     "  Packaging compliance: %d rows | %d sites",
