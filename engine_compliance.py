@@ -220,22 +220,28 @@ def site_summary(compliance: pd.DataFrame) -> pd.DataFrame:
     return grp.sort_values("Compliance_%", ascending=True)
 
 
-def packaging_compliance(site_raw: pd.DataFrame, site_packaging: pd.DataFrame) -> pd.DataFrame:
+def packaging_compliance(
+    site_raw: pd.DataFrame,
+    site_packaging: pd.DataFrame,
+    store_site_map: dict | None = None,
+) -> pd.DataFrame:
     """
     Compute packaging compliance: Opalion orders vs Recipe Builder requirements.
+    Joins on Site_Key + SKU (both sides keyed by SKU from the mapping tab).
 
     Parameters
     ----------
-    site_raw      : from engine_ingredient.run() — ALL ingredient rows; packaging
-                    rows are filtered here by Supplier containing 'opal'
-    site_packaging: from engine_opalion.run()    — packaging ordered per site
+    site_raw      : from engine_ingredient.run() — packaging rows have Supplier='Opalion'
+    site_packaging: from engine_opalion.run()    — columns: Site_Key, SKU, Total_Units
+    store_site_map: optional {Store_Name -> Site_Key} to resolve req-side store names
 
     Returns
     -------
-    pkg_compliance : DataFrame with columns:
-                     Site_Key, SKU, Ingredient, Product_Name,
-                     Required_Units, Ordered_Units, Gap, Status
+    pkg_compliance : DataFrame — Site_Key, SKU, Ingredient, Product_Name,
+                                 Required_Units, Ordered_Units, Gap, Status
     """
+    import logging as _log
+    _logger = _log.getLogger(__name__)
 
     COLS = ["Site_Key", "SKU", "Ingredient", "Product_Name",
             "Required_Units", "Ordered_Units", "Gap", "Status"]
@@ -244,75 +250,81 @@ def packaging_compliance(site_raw: pd.DataFrame, site_packaging: pd.DataFrame) -
         return pd.DataFrame(columns=COLS)
 
     # ── Filter site_raw to Opalion packaging rows ─────────────────────────────
-    opal_mask = site_raw["Supplier"].str.lower().str.contains("opal", na=False)
+    if "Supplier" not in site_raw.columns:
+        return pd.DataFrame(columns=COLS)
+    opal_mask   = site_raw["Supplier"].str.lower().str.contains("opal", na=False)
     pkg_req_raw = site_raw[opal_mask].copy()
 
     if pkg_req_raw.empty:
+        _logger.warning("  packaging_compliance: no Opalion rows found in site_raw (check Supplier column)")
         return pd.DataFrame(columns=COLS)
 
+    # Aggregate required units per Store + SKU
     pkg_req = (
         pkg_req_raw
-        .groupby(["Store", "SKU", "Ingredient", "UOM"], dropna=False)
-        ["Total_Raw_Qty"].sum()
+        .groupby(["Store", "SKU", "Ingredient"], dropna=False)
+        .agg(Required_Units=("Total_Raw_Qty", "sum"))
         .reset_index()
-        .rename(columns={"Store": "Store_Name", "Total_Raw_Qty": "Required_Units"})
+        .rename(columns={"Store": "Store_Name"})
     )
 
-    # ── Fuzzy-match Ingredient -> Product_Base ────────────────────────────────
-    # Recipe Builder ingredient names (e.g. "Hot Chick Grab Bag") should closely
-    # match Opalion Product_Base names (e.g. "Hot Chick Grab Bag") after stripping
-    # the "- Case of N" suffix that engine_opalion already removes.
+    # Resolve Store_Name → Site_Key using store_site_map (same logic as engine_compliance.run)
+    pkg_req["Site_Key"] = pkg_req["Store_Name"].map(store_site_map or {})
+    # Fallback: use Store_Name itself if no mapping found
+    pkg_req["Site_Key"] = pkg_req["Site_Key"].fillna(pkg_req["Store_Name"])
 
-    all_products  = site_packaging["Product_Base"].dropna().unique().tolist()
-    norm_products = [re.sub(r'\s+', ' ', str(p)).strip().lower() for p in all_products]
+    # Aggregate required per Site_Key + SKU (a site may run multiple brands)
+    req_agg = (
+        pkg_req
+        .groupby(["Site_Key", "SKU", "Ingredient"], dropna=False)
+        .agg(Required_Units=("Required_Units", "sum"))
+        .reset_index()
+    )
 
-    def _match_product(ingredient: str) -> str | None:
-        if not ingredient:
-            return None
-        norm_ing = re.sub(r'\s+', ' ', str(ingredient)).strip().lower()
-        # Exact
-        if norm_ing in norm_products:
-            return all_products[norm_products.index(norm_ing)]
-        # Fuzzy (cutoff 0.65 — packaging names can differ slightly)
-        hits = difflib.get_close_matches(norm_ing, norm_products, n=1, cutoff=0.65)
-        if hits:
-            return all_products[norm_products.index(hits[0])]
-        return None
+    _logger.info(
+        "  packaging_compliance: %d req rows across %d sites",
+        len(req_agg), req_agg["Site_Key"].nunique(),
+    )
 
-    pkg_req["Product_Base"] = pkg_req["Ingredient"].apply(_match_product)
-
-    # ── Aggregate ordered units per Store_Name + Product_Base ────────────────
+    # ── Aggregate ordered units per Site_Key + SKU ────────────────────────────
     ord_agg = (
         site_packaging
-        .groupby(["Site_Key", "Store_Name", "Product_Base", "Product_Name"], dropna=False)
+        .groupby(["Site_Key", "SKU", "Recipe_Name", "Product_Name"], dropna=False)
         .agg(Ordered_Units=("Total_Units", "sum"))
         .reset_index()
-    ) if "Store_Name" in site_packaging.columns else (
-        site_packaging
-        .groupby(["Site_Key", "Product_Base", "Product_Name"], dropna=False)
-        .agg(Ordered_Units=("Total_Units", "sum"))
-        .reset_index()
-        .assign(Store_Name=lambda d: d["Site_Key"])
     )
 
-    # ── Outer merge on Store_Name + Product_Base ──────────────────────────────
-    pkg_comp = pkg_req.merge(ord_agg, on=["Store_Name", "Product_Base"], how="outer")
-    pkg_comp["Site_Key"] = pkg_comp.get("Site_Key", pkg_comp["Store_Name"])
+    # ── Outer merge on Site_Key + SKU ─────────────────────────────────────────
+    pkg_comp = req_agg.merge(ord_agg, on=["Site_Key", "SKU"], how="outer")
 
-    pkg_comp["Required_Units"] = pkg_comp["Required_Units"].fillna(0)
-    pkg_comp["Ordered_Units"]  = pkg_comp["Ordered_Units"].fillna(0)
-    pkg_comp["Gap"] = pkg_comp["Ordered_Units"] - pkg_comp["Required_Units"]
+    pkg_comp["Required_Units"] = pd.to_numeric(pkg_comp["Required_Units"], errors="coerce").fillna(0)
+    pkg_comp["Ordered_Units"]  = pd.to_numeric(pkg_comp["Ordered_Units"],  errors="coerce").fillna(0)
+    pkg_comp["Gap"]    = pkg_comp["Ordered_Units"] - pkg_comp["Required_Units"]
     pkg_comp["Status"] = pkg_comp["Gap"].apply(
         lambda g: "Surplus" if g > 0 else ("Deficit" if g < 0 else "Exact")
     )
+
+    # Fill display columns
+    if "Ingredient"    not in pkg_comp.columns: pkg_comp["Ingredient"]    = ""
+    if "Product_Name"  not in pkg_comp.columns: pkg_comp["Product_Name"]  = ""
+    pkg_comp["Ingredient"]   = pkg_comp["Ingredient"].fillna(pkg_comp.get("Recipe_Name", ""))
+    pkg_comp["Product_Name"] = pkg_comp["Product_Name"].fillna("")
 
     for c in COLS:
         if c not in pkg_comp.columns:
             pkg_comp[c] = ""
 
+    _logger.info(
+        "  packaging_compliance: %d result rows | Surplus %d | Deficit %d | Exact %d",
+        len(pkg_comp),
+        int((pkg_comp["Status"] == "Surplus").sum()),
+        int((pkg_comp["Status"] == "Deficit").sum()),
+        int((pkg_comp["Status"] == "Exact").sum()),
+    )
+
     return (
         pkg_comp[COLS]
-        .sort_values(["Site_Key", "Ingredient"])
+        .sort_values(["Site_Key", "SKU"])
         .reset_index(drop=True)
     )
 

@@ -601,7 +601,7 @@ def main():
                 len(site_packaging), len(_opal_unmatched),
             )
             if not site_packaging.empty:
-                pkg_compliance = engine_compliance.packaging_compliance(site_raw, site_packaging)
+                pkg_compliance = engine_compliance.packaging_compliance(site_raw, site_packaging, store_site_map=_store_site_map)
                 pkg_site_summ  = engine_compliance.packaging_site_summary(pkg_compliance)
                 log.info(
                     "  Packaging compliance: %d rows | %d sites",
