@@ -305,10 +305,18 @@ def main():
     # Opalion is optional — load if present
     opalion_df = None
     if "opalion" in found:
-        opal_buf   = _download(drive, found["opalion"]["id"])
-        opalion_df = pd.read_csv(opal_buf)
-        opalion_df.columns = opalion_df.columns.str.strip()
-        log.info("  Opalion  %d rows", len(opalion_df))
+        opal_buf = _download(drive, found["opalion"]["id"])
+        fname    = found["opalion"]["name"].lower()
+        try:
+            if fname.endswith(".csv"):
+                opalion_df = pd.read_csv(opal_buf, encoding="utf-8", errors="replace")
+            else:
+                opalion_df = pd.read_excel(opal_buf, dtype=str, engine="openpyxl")
+            opalion_df.columns = opalion_df.columns.str.strip()
+            log.info("  Opalion  %d rows", len(opalion_df))
+        except Exception as _oe:
+            log.warning("  Opalion file could not be read (%s) — skipping packaging", _oe)
+            opalion_df = None
 
     # ── [3/6] Load Drop Account Mapping (live Google Sheet) ───────────────────
     log.info("[3/6] Loading Drop Account Mapping from Google Sheets ...")
