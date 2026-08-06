@@ -1300,9 +1300,13 @@ with tab4:
 
         _all_ams = sorted(_pd_comp["_AM"].dropna().unique().tolist())
 
-        # SKU label map
+        # SKU label map — fall back to Ingredient name from data, then SKU code
+        _pd_sku_ingr_map = (
+            _pd_comp.dropna(subset=["SKU", "Ingredient"])
+            .groupby("SKU")["Ingredient"].first().to_dict()
+        ) if "Ingredient" in _pd_comp.columns else {}
         _pd_sku_labels = sorted([
-            f"{sku} — {_SKU_NAME_MAP.get(sku, sku)}"
+            f"{sku} — {_SKU_NAME_MAP.get(sku, _pd_sku_ingr_map.get(sku, sku))}"
             for sku in _pd_comp["SKU"].dropna().unique()
         ]) if "SKU" in _pd_comp.columns else []
         _pd_label_to_sku = {lbl: lbl.split(" — ")[0] for lbl in _pd_sku_labels}
