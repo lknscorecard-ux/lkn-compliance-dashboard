@@ -701,7 +701,7 @@ with tab1:
 
     # ── Row 2: Top 10 / Bottom 10 sites ───────────────────────────────────────
     if not site_summ.empty and "Compliance_%" in site_summ.columns:
-        c_top, c_bot = st.columns(2)
+        c_bot, c_top = st.columns(2)
 
         with c_top:
             st.subheader("🏆 Top 10 Compliant Sites")
@@ -1241,21 +1241,43 @@ with tab3:
         if not pkg_summ.empty:
             _pkg_disp = pkg_summ.copy()
 
-            # Coerce numeric cols first (Google Sheets returns everything as strings)
+            # Coerce known numeric columns
             for _nc in ["Compliant", "Non-Compliant", "Total_Items", "Compliance_%"]:
                 if _nc in _pkg_disp.columns:
                     _pkg_disp[_nc] = pd.to_numeric(_pkg_disp[_nc], errors="coerce").fillna(0)
 
-            # Sort and rank
+            # Sort descending by compliance
             if "Compliance_%" in _pkg_disp.columns:
                 _pkg_disp = _pkg_disp.sort_values("Compliance_%", ascending=False).reset_index(drop=True)
 
-            # Add Store Name column (mapped from Site_Key; fallback = Site_Key value)
-            if "Site_Key" in _pkg_disp.columns:
-                _pkg_disp.insert(0, "Store Name",
-                    _pkg_disp["Site_Key"].map(_site_key_to_store).fillna(_pkg_disp["Site_Key"]))
-                _pkg_disp = _pkg_disp.drop(columns=["Site_Key"])
+            # Build Store Name from Site_Key (pkg_summ or pkg_comp) + mapping sheet
+            # Priority: site_mapping lookup → food compliance Store_Name → Site_Key itself
+            _combined_store_map = {}
+            if not compliance.empty and "Site_Key" in compliance.columns and "Store_Name" in compliance.columns:
+                _combined_store_map = compliance.groupby("Site_Key")["Store_Name"].first().to_dict()
+            if _site_key_to_store:
+                _combined_store_map.update(_site_key_to_store)
 
+            # Find which column has the site identifier
+            _sk_col = next((c for c in ["Site_Key", "Store_Name", "Store Name"] if c in _pkg_disp.columns), None)
+            if _sk_col:
+                _store_vals = _pkg_disp[_sk_col].astype(str)
+                _pkg_disp["Store Name"] = _store_vals.map(_combined_store_map).fillna(_store_vals)
+            else:
+                # Fallback: try to pull store names from pkg_comp by matching row order
+                if not pkg_comp.empty and "Site_Key" in pkg_comp.columns:
+                    _pk_sites = (pkg_comp.groupby("Site_Key")
+                                 .first().reset_index()["Site_Key"].tolist())
+                    _pkg_disp["Store Name"] = (pd.Series(_pk_sites[:len(_pkg_disp)])
+                                                .map(_combined_store_map)
+                                                .fillna(pd.Series(_pk_sites[:len(_pkg_disp)])))
+
+            # Build final display: Rank | Store Name | Compliant | Non-Compliant | Total_Items | Compliance_%
+            _disp_cols = []
+            for _c in ["Store Name", "Compliant", "Non-Compliant", "Total_Items", "Compliance_%"]:
+                if _c in _pkg_disp.columns:
+                    _disp_cols.append(_c)
+            _pkg_disp = _pkg_disp[_disp_cols].copy()
             _pkg_disp.insert(0, "Rank", range(1, len(_pkg_disp) + 1))
 
             # Round counts to whole numbers
@@ -1276,7 +1298,14 @@ with tab3:
             _pkg_styled = _style_fn(
                 _pkg_colour, subset=["Compliance_%"] if "Compliance_%" in _pkg_disp.columns else []
             )
-            st.dataframe(_pkg_styled, use_container_width=True, height=400)
+            st.dataframe(
+                _pkg_styled,
+                use_container_width=True,
+                height=400,
+                column_config={
+                    "Compliance_%": st.column_config.NumberColumn("Compliance_%", format="%.1f%%")
+                },
+            )
             st.caption(f"{len(_pkg_disp):,} sites")
             st.download_button("⬇ Download Site Packaging Summary",
                                data=_to_csv(_pkg_disp),
