@@ -1241,24 +1241,24 @@ with tab3:
         if not pkg_summ.empty:
             _pkg_disp = pkg_summ.copy()
 
-            # Replace Site_Key with Store Name where available
-            if "Site_Key" in _pkg_disp.columns:
-                _pkg_disp["Store Name"] = (
-                    _pkg_disp["Site_Key"].map(_site_key_to_store)
-                    .fillna(_pkg_disp["Site_Key"])
-                )
-                _pkg_disp = _pkg_disp.drop(columns=["Site_Key"])
+            # Coerce numeric cols first (Google Sheets returns everything as strings)
+            for _nc in ["Compliant", "Non-Compliant", "Total_Items", "Compliance_%"]:
+                if _nc in _pkg_disp.columns:
+                    _pkg_disp[_nc] = pd.to_numeric(_pkg_disp[_nc], errors="coerce").fillna(0)
 
-            # Coerce and round all numeric columns to whole numbers
-            _str_cols = {"Store Name", "Store_Name", "Week_Commencing"}
-            for c in _pkg_disp.columns:
-                if c not in _str_cols:
-                    _pkg_disp[c] = pd.to_numeric(_pkg_disp[c], errors="coerce")
+            # Sort and rank
             if "Compliance_%" in _pkg_disp.columns:
                 _pkg_disp = _pkg_disp.sort_values("Compliance_%", ascending=False).reset_index(drop=True)
-                _pkg_disp.insert(0, "Rank", range(1, len(_pkg_disp) + 1))
 
-            # Round count columns (Compliant, Non-Compliant, Total_Items) to int
+            # Add Store Name column (mapped from Site_Key; fallback = Site_Key value)
+            if "Site_Key" in _pkg_disp.columns:
+                _pkg_disp.insert(0, "Store Name",
+                    _pkg_disp["Site_Key"].map(_site_key_to_store).fillna(_pkg_disp["Site_Key"]))
+                _pkg_disp = _pkg_disp.drop(columns=["Site_Key"])
+
+            _pkg_disp.insert(0, "Rank", range(1, len(_pkg_disp) + 1))
+
+            # Round counts to whole numbers
             for _rc in ["Compliant", "Non-Compliant", "Total_Items"]:
                 if _rc in _pkg_disp.columns:
                     _pkg_disp[_rc] = _pkg_disp[_rc].round(0).astype("Int64")
