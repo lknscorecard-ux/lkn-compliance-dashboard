@@ -592,8 +592,8 @@ with tab1:
     k5.metric("Bidfood Spend",     f"£{_bidfood_spend:,.0f}")
     st.divider()
 
-    # ── Row 1: Donut + Top 10 Deficit SKUs ────────────────────────────────────
-    c_donut, c_deficit = st.columns([1, 2])
+    # ── Row 1: Donut | Bottom 10 Sites | Top 10 Sites ─────────────────────────
+    c_donut, c_top, c_bot = st.columns([1, 1, 1])
 
     with c_donut:
         st.subheader("Site Compliance")
@@ -609,7 +609,7 @@ with tab1:
                 hovertemplate="%{label}: %{value} sites<extra></extra>",
             ))
             _fig_donut.update_layout(
-                height=300,
+                height=380,
                 margin=dict(t=10, b=0, l=0, r=0),
                 showlegend=True,
                 legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
@@ -622,87 +622,7 @@ with tab1:
         else:
             st.info("No site data available.")
 
-    with c_deficit:
-        if not compliance.empty and "Status" in compliance.columns:
-            _food = compliance[compliance["SKU"].astype(str).isin(_FOOD_SKUS)].copy()
-            _food["Display_Name"] = (
-                _food["SKU"].astype(str).map(_SKU_NAME_MAP).fillna(_food["Ingredient"])
-            )
-
-            # Per-SKU per-site status — avoid groupby.apply() (broken in pandas 3.x)
-            _food["_nc"] = (_food["Status"] == "Non-Compliant")
-            _nc_flag = (
-                _food.groupby(["Display_Name", "Site_Key"])["_nc"]
-                .any()
-                .reset_index()
-            )
-            _nc_flag["Site_Status"] = _nc_flag["_nc"].map(
-                {True: "Non-Compliant", False: "Compliant"}
-            )
-            _sku_site = _nc_flag[["Display_Name", "Site_Key", "Site_Status"]]
-
-            def _pct_sites(label):
-                _tmp = _sku_site.copy()
-                _tmp["_match"] = (_tmp["Site_Status"] == label).astype(int)
-                _agg = (
-                    _tmp.groupby("Display_Name")
-                    .agg(_sum=("_match", "sum"), _tot=("_match", "count"))
-                    .reset_index()
-                )
-                _agg["Pct"] = (_agg["_sum"] / _agg["_tot"] * 100).round(1)
-                return _agg[["Display_Name", "Pct"]]
-
-            _nc_grp   = _pct_sites("Non-Compliant")
-            _comp_grp = _pct_sites("Compliant")
-            _nc5   = _nc_grp.nlargest(5, "Pct").sort_values("Pct", ascending=True)
-            _comp5 = _comp_grp.nlargest(5, "Pct").sort_values("Pct", ascending=True)
-
-            _nc_col, _comp_col = st.columns(2)
-
-            # ── Top 5 Non-Compliant SKUs (% of sites) ─────────────────────────
-            with _nc_col:
-                st.markdown("**🔴 Top 5 Non-Compliant SKUs (% of sites)**")
-                if not _nc5.empty:
-                    _fig_nc = px.bar(
-                        _nc5, x="Pct", y="Display_Name", orientation="h",
-                        color_discrete_sequence=["#C00000"],
-                        text=[f"{v:.1f}%" for v in _nc5["Pct"]],
-                        labels={"Pct": "Sites Non-Compliant %", "Display_Name": ""},
-                    )
-                    _fig_nc.update_traces(textposition="outside")
-                    _fig_nc.update_layout(
-                        height=250, margin=dict(t=10, b=0, l=0, r=20),
-                        xaxis=dict(range=[0, 135], fixedrange=True),
-                    )
-                    st.plotly_chart(_fig_nc, use_container_width=True)
-                else:
-                    st.success("No non-compliant SKUs!")
-
-            # ── Top 5 Compliant SKUs (% of sites) ─────────────────────────────
-            with _comp_col:
-                st.markdown("**🟢 Top 5 Compliant SKUs (% of sites)**")
-                if not _comp5.empty:
-                    _fig_comp = px.bar(
-                        _comp5, x="Pct", y="Display_Name", orientation="h",
-                        color_discrete_sequence=["#538135"],
-                        text=[f"{v:.1f}%" for v in _comp5["Pct"]],
-                        labels={"Pct": "Sites Compliant %", "Display_Name": ""},
-                    )
-                    _fig_comp.update_traces(textposition="outside")
-                    _fig_comp.update_layout(
-                        height=250, margin=dict(t=10, b=0, l=0, r=20),
-                        xaxis=dict(range=[0, 135], fixedrange=True),
-                    )
-                    st.plotly_chart(_fig_comp, use_container_width=True)
-                else:
-                    st.info("No compliant SKUs found.")
-
-    st.divider()
-
-    # ── Row 2: Top 10 / Bottom 10 sites ───────────────────────────────────────
     if not site_summ.empty and "Compliance_%" in site_summ.columns:
-        c_bot, c_top = st.columns(2)
-
         with c_top:
             st.subheader("🏆 Top 10 Compliant Sites")
             _top10 = (site_summ.nlargest(10, "Compliance_%")
@@ -744,6 +664,83 @@ with tab1:
                 xaxis=dict(range=[0, 115], fixedrange=True),
             )
             st.plotly_chart(_fig_bot, use_container_width=True)
+
+    st.divider()
+
+    # ── Row 2: SKU-wise compliance ─────────────────────────────────────────────
+    if not compliance.empty and "Status" in compliance.columns:
+        _food = compliance[compliance["SKU"].astype(str).isin(_FOOD_SKUS)].copy()
+        _food["Display_Name"] = (
+            _food["SKU"].astype(str).map(_SKU_NAME_MAP).fillna(_food["Ingredient"])
+        )
+
+        # Per-SKU per-site status
+        _food["_nc"] = (_food["Status"] == "Non-Compliant")
+        _nc_flag = (
+            _food.groupby(["Display_Name", "Site_Key"])["_nc"]
+            .any()
+            .reset_index()
+        )
+        _nc_flag["Site_Status"] = _nc_flag["_nc"].map(
+            {True: "Non-Compliant", False: "Compliant"}
+        )
+        _sku_site = _nc_flag[["Display_Name", "Site_Key", "Site_Status"]]
+
+        def _pct_sites(label):
+            _tmp = _sku_site.copy()
+            _tmp["_match"] = (_tmp["Site_Status"] == label).astype(int)
+            _agg = (
+                _tmp.groupby("Display_Name")
+                .agg(_sum=("_match", "sum"), _tot=("_match", "count"))
+                .reset_index()
+            )
+            _agg["Pct"] = (_agg["_sum"] / _agg["_tot"] * 100).round(1)
+            return _agg[["Display_Name", "Pct"]]
+
+        _nc_grp   = _pct_sites("Non-Compliant")
+        _comp_grp = _pct_sites("Compliant")
+        _nc5   = _nc_grp.nlargest(5, "Pct").sort_values("Pct", ascending=True)
+        _comp5 = _comp_grp.nlargest(5, "Pct").sort_values("Pct", ascending=True)
+
+        _nc_col, _comp_col = st.columns(2)
+
+        # ── Top 5 Non-Compliant SKUs (% of sites) ─────────────────────────────
+        with _nc_col:
+            st.markdown("**🔴 Top 5 Non-Compliant SKUs (% of sites)**")
+            if not _nc5.empty:
+                _fig_nc = px.bar(
+                    _nc5, x="Pct", y="Display_Name", orientation="h",
+                    color_discrete_sequence=["#C00000"],
+                    text=[f"{v:.1f}%" for v in _nc5["Pct"]],
+                    labels={"Pct": "Sites Non-Compliant %", "Display_Name": ""},
+                )
+                _fig_nc.update_traces(textposition="outside")
+                _fig_nc.update_layout(
+                    height=250, margin=dict(t=10, b=0, l=0, r=20),
+                    xaxis=dict(range=[0, 135], fixedrange=True),
+                )
+                st.plotly_chart(_fig_nc, use_container_width=True)
+            else:
+                st.success("No non-compliant SKUs!")
+
+        # ── Top 5 Compliant SKUs (% of sites) ─────────────────────────────────
+        with _comp_col:
+            st.markdown("**🟢 Top 5 Compliant SKUs (% of sites)**")
+            if not _comp5.empty:
+                _fig_comp = px.bar(
+                    _comp5, x="Pct", y="Display_Name", orientation="h",
+                    color_discrete_sequence=["#538135"],
+                    text=[f"{v:.1f}%" for v in _comp5["Pct"]],
+                    labels={"Pct": "Sites Compliant %", "Display_Name": ""},
+                )
+                _fig_comp.update_traces(textposition="outside")
+                _fig_comp.update_layout(
+                    height=250, margin=dict(t=10, b=0, l=0, r=20),
+                    xaxis=dict(range=[0, 135], fixedrange=True),
+                )
+                st.plotly_chart(_fig_comp, use_container_width=True)
+            else:
+                st.info("No compliant SKUs found.")
 
     st.divider()
 
