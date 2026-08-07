@@ -636,12 +636,12 @@ with tab1:
                 text="label",
                 labels={"Compliance_%": "Compliance %", "Store_Name": ""},
             )
-            _fig_top.update_traces(textposition="outside")
+            _fig_top.update_traces(textposition="auto")
             _fig_top.update_layout(
                 height=380,
-                margin=dict(t=0, b=0, l=0, r=70),
+                margin=dict(t=0, b=0, l=0, r=10),
                 coloraxis_showscale=False,
-                xaxis=dict(range=[0, 115], fixedrange=True),
+                xaxis=dict(range=[0, 105], fixedrange=True),
             )
             st.plotly_chart(_fig_top, use_container_width=True)
 
@@ -657,11 +657,11 @@ with tab1:
                 text="label",
                 labels={"Compliance_%": "Compliance %", "Store_Name": ""},
             )
-            _fig_bot.update_traces(textposition="outside")
+            _fig_bot.update_traces(textposition="auto")
             _fig_bot.update_layout(
                 height=380,
-                margin=dict(t=0, b=0, l=0, r=70),
-                xaxis=dict(range=[0, 115], fixedrange=True),
+                margin=dict(t=0, b=0, l=0, r=10),
+                xaxis=dict(range=[0, 105], fixedrange=True),
             )
             st.plotly_chart(_fig_bot, use_container_width=True)
 
