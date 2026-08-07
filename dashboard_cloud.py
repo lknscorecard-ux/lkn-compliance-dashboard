@@ -315,6 +315,16 @@ if not _site_mapping.empty and "Site Key" in _site_mapping.columns and "Account 
         .to_dict()
     )
 
+# Build Site_Key → Store Name lookup
+_site_key_to_store: dict = {}
+if not _site_mapping.empty and "Site Key" in _site_mapping.columns:
+    _sn_col = next((c for c in _site_mapping.columns if "store name" in c.lower() or c.lower() == "store"), None)
+    if _sn_col:
+        _site_key_to_store = (
+            _site_mapping.set_index("Site Key")[_sn_col]
+            .replace("", pd.NA).dropna().to_dict()
+        )
+
 # Build Site_Key → Last Order Date lookup
 _site_key_to_last_order: dict = {}
 if not _site_mapping.empty and "Site Key" in _site_mapping.columns:
@@ -1230,14 +1240,28 @@ with tab3:
         st.subheader("Site Packaging Ranking")
         if not pkg_summ.empty:
             _pkg_disp = pkg_summ.copy()
-            # Numeric columns (no Account Manager here)
+
+            # Replace Site_Key with Store Name where available
+            if "Site_Key" in _pkg_disp.columns:
+                _pkg_disp["Store Name"] = (
+                    _pkg_disp["Site_Key"].map(_site_key_to_store)
+                    .fillna(_pkg_disp["Site_Key"])
+                )
+                _pkg_disp = _pkg_disp.drop(columns=["Site_Key"])
+
+            # Coerce and round all numeric columns to whole numbers
+            _str_cols = {"Store Name", "Store_Name", "Week_Commencing"}
             for c in _pkg_disp.columns:
-                if c not in ["Site_Key", "Store_Name"]:
-                    _pkg_disp[c] = pd.to_numeric(_pkg_disp[c], errors="coerce").fillna(_pkg_disp[c])
+                if c not in _str_cols:
+                    _pkg_disp[c] = pd.to_numeric(_pkg_disp[c], errors="coerce")
             if "Compliance_%" in _pkg_disp.columns:
-                _pkg_disp["Compliance_%"] = pd.to_numeric(_pkg_disp["Compliance_%"], errors="coerce")
                 _pkg_disp = _pkg_disp.sort_values("Compliance_%", ascending=False).reset_index(drop=True)
                 _pkg_disp.insert(0, "Rank", range(1, len(_pkg_disp) + 1))
+
+            # Round count columns (Compliant, Non-Compliant, Total_Items) to int
+            for _rc in ["Compliant", "Non-Compliant", "Total_Items"]:
+                if _rc in _pkg_disp.columns:
+                    _pkg_disp[_rc] = _pkg_disp[_rc].round(0).astype("Int64")
 
             def _pkg_colour(v):
                 try:
@@ -1337,20 +1361,26 @@ with tab4:
                 placeholder="Filter by account manager…",
                 key="pkg_detail_am_filter",
             )
-        # Scope site dropdown to selected AM
+        # Scope site dropdown to selected AM — show Store Names in dropdown
         if _pd_sel_am:
             _pd_am_sites = {sk for sk, am in _pd_am_map.items() if am in _pd_sel_am}
-            _pd_site_opts = sorted(
+            _pd_site_keys_scope = (
                 _pd_comp[_pd_comp["Site_Key"].isin(_pd_am_sites)]["Site_Key"]
                 .dropna().unique().tolist()
             )
         else:
-            _pd_site_opts = sorted(_pd_comp["Site_Key"].dropna().unique().tolist())
+            _pd_site_keys_scope = _pd_comp["Site_Key"].dropna().unique().tolist()
+
+        # Build store-name options and a reverse map store_name → site_key
+        _pd_store_opts = sorted([
+            _site_key_to_store.get(sk, sk) for sk in _pd_site_keys_scope
+        ])
+        _pd_store_to_key = {_site_key_to_store.get(sk, sk): sk for sk in _pd_site_keys_scope}
 
         with _pdc2:
-            _pd_sel_sites = st.multiselect(
-                "Site", _pd_site_opts,
-                placeholder="Type site name…",
+            _pd_sel_stores = st.multiselect(
+                "Site", _pd_store_opts,
+                placeholder="Type store name…",
                 key="pkg_detail_site_filter",
             )
         with _pdc3:
@@ -1369,8 +1399,9 @@ with tab4:
         _pd_disp = _pd_comp.copy()
         if _pd_sel_am:
             _pd_disp = _pd_disp[_pd_disp["_AM"].isin(_pd_sel_am)]
-        if _pd_sel_sites:
-            _pd_disp = _pd_disp[_pd_disp["Site_Key"].isin(_pd_sel_sites)]
+        if _pd_sel_stores:
+            _pd_sel_site_keys = [_pd_store_to_key[s] for s in _pd_sel_stores if s in _pd_store_to_key]
+            _pd_disp = _pd_disp[_pd_disp["Site_Key"].isin(_pd_sel_site_keys)]
         if _pd_sel_status != "All":
             _pd_disp = _pd_disp[_pd_disp["Status"] == _pd_sel_status]
         if _pd_sel_skus:
@@ -1406,17 +1437,27 @@ with tab4:
             st.divider()
 
         # ── Detail table ──────────────────────────────────────────────────────
+        # Add Store Name + SKU Name to display data
+        _pd_disp = _pd_disp.copy()
+        _pd_disp["Store Name"] = (
+            _pd_disp["Site_Key"].map(_site_key_to_store).fillna(_pd_disp["Site_Key"])
+            if "Site_Key" in _pd_disp.columns else ""
+        )
+        _pd_disp["SKU Name"] = (
+            _pd_disp["SKU"].map(_pd_sku_ingr_map).fillna(_pd_disp["SKU"])
+            if "SKU" in _pd_disp.columns else ""
+        )
+
         _pd_col_rename = {
-            "Site_Key":       "Site",
             "Opening_Units":  "Opening Stock (Carry-forward)",
             "Required_Units": "Stock Used",
             "Ordered_Units":  "Stock Ordered from Opalion",
             "Gap":            "Ordered vs Used (Variance)",
             "Closing_Units":  "Closing Stock",
         }
-        # Only show these columns — AM/Ingredient/Product_Name excluded
+        # Show Store Name + SKU Name; exclude raw Site_Key, AM, Ingredient, Product_Name
         _pd_show_raw = [c for c in [
-            "Week_Commencing", "Site_Key", "SKU",
+            "Week_Commencing", "Store Name", "SKU", "SKU Name",
             "Opening_Units", "Required_Units", "Ordered_Units",
             "Gap", "Closing_Units", "Status",
         ] if c in _pd_disp.columns]
