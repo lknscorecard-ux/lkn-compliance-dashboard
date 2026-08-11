@@ -1,0 +1,42 @@
+# cloudbuild.yaml  —  builds, pushes, and deploys the Cloud Run job
+# Run:  gcloud builds submit --config cloudbuild.yaml .
+
+substitutions:
+  _REGION:  europe-west2     # change to your preferred region
+  _JOB:     lkn-pipeline
+  _REPO:    lkn
+
+steps:
+
+  # 1. Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - -t
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO/pipeline:latest'
+      - .
+
+  # 2. Push to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - push
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO/pipeline:latest'
+
+  # 3. Deploy / update Cloud Run Job
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - '$_JOB'
+      - '--image=$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO/pipeline:latest'
+      - '--region=$_REGION'
+      - '--task-timeout=900'
+      - '--max-retries=1'
+      - '--set-secrets=GOOGLE_CREDENTIALS_JSON=lkn-sa-key:latest'
+      - '--service-account=lkn-pipeline-sa@$PROJECT_ID.iam.gserviceaccount.com'
+      - '--update-env-vars=DRIVE_UPLOAD_FOLDER_ID=1BV1zLMulHiQXWdXucv6-4JEOkF19eypP,RESULTS_SHEET_ID=1VafKGoN8tNMHRDfMyfBJwKCMVtLOt5yoZB6mLTY3Aw8,MAPPING_SHEET_ID=1P94V4FDrx9TFmDhUuPWIP2EGz4Dp2gCmjJfTkoebTUw'
+
+images:
+  - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO/pipeline:latest'

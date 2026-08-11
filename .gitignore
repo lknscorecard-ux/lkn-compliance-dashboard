@@ -1,0 +1,5 @@
+﻿*.json
+*.xlsx
+*.csv
+__pycache__/
+.env

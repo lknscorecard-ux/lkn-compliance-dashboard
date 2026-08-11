@@ -1,0 +1,10 @@
+.gcloudignore
+.git
+__pycache__/
+*.pyc
+.env
+*.json
+*.csv
+
+# Allow xlsx files needed by Dockerfile
+# (overrides .gitignore which excludes *.xlsx)

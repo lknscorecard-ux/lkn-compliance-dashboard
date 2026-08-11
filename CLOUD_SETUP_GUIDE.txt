@@ -1,0 +1,209 @@
+CLOUD SETUP GUIDE  —  LKN Automated Compliance System
+=======================================================
+Total setup time: ~45 minutes (one-time)
+After setup: your only weekly task is dragging 3 files into Google Drive.
+
+
+════════════════════════════════════════════════════════
+WHAT YOU NEED BEFORE STARTING
+════════════════════════════════════════════════════════
+  ✓  A Google account (Gmail)
+  ✓  A GitHub account (free at github.com)
+  ✓  Docker Desktop installed (docker.com/products/docker-desktop)
+  ✓  Google Cloud SDK installed (cloud.google.com/sdk/docs/install)
+
+Free tiers used:
+  • Google Cloud: Cloud Run (2M free requests/month), Cloud Scheduler,
+                  Secret Manager, Artifact Registry
+  • Google Drive, Google Sheets: free
+  • Streamlit Community Cloud: free (1 app)
+
+Estimated monthly cost: £0
+
+
+════════════════════════════════════════════════════════
+PART 1 — GOOGLE CLOUD PROJECT  (~10 min)
+════════════════════════════════════════════════════════
+
+Step 1.1  Create a Google Cloud project
+  → Go to: https://console.cloud.google.com
+  → Click "New Project"
+  → Name it: lkn-compliance
+  → Note your Project ID (e.g. lkn-compliance-123456)
+  → Add billing account (required even for free tier — card for ID only, won't be charged)
+
+Step 1.2  Install and authenticate gcloud CLI
+  → Download from: https://cloud.google.com/sdk/docs/install
+  → Open Command Prompt and run:
+       gcloud auth login
+       gcloud config set project YOUR-PROJECT-ID
+
+Step 1.3  Make sure Docker Desktop is running
+  → Open Docker Desktop
+  → Wait until it shows "Docker is running" in the system tray
+
+
+════════════════════════════════════════════════════════
+PART 2 — GOOGLE DRIVE UPLOAD FOLDER  (~5 min)
+════════════════════════════════════════════════════════
+
+Step 2.1  Create the upload folder
+  → Go to: https://drive.google.com
+  → Create a new folder called: LKN-Weekly-Uploads
+  → Inside it, you can create 3 sub-folders (optional but tidy):
+       bidfood/
+       items/
+       options/
+
+Step 2.2  Get the folder ID
+  → Open the folder in Google Drive
+  → Look at the URL: https://drive.google.com/drive/folders/XXXXXXXXXXXXX
+  → Copy the ID (the part after /folders/)
+  → Save it — you'll need it in Part 4
+
+NOTE: You will share this folder with the service account email in Part 3.
+
+
+════════════════════════════════════════════════════════
+PART 3 — GOOGLE SHEETS  (~5 min)
+════════════════════════════════════════════════════════
+
+Step 3.1  Results Sheet
+  → Go to: https://sheets.google.com
+  → Create a new blank spreadsheet
+  → Name it: LKN Compliance Results
+  → Copy the Sheet ID from the URL (the part between /d/ and /edit)
+  → Save it — you'll need it in Part 4
+
+Step 3.2  Drop Account Mapping Sheet
+  → You already have this sheet with your Drop Account Mapping
+  → Copy its Sheet ID from the URL (between /d/ and /edit)
+  → Save it — you'll need it in Part 4
+
+IMPORTANT: After running deploy.sh (Part 4), you will need to share both
+Google Sheets with the service account email address that gets printed.
+The service account email looks like:
+  lkn-pipeline-sa@YOUR-PROJECT-ID.iam.gserviceaccount.com
+
+
+════════════════════════════════════════════════════════
+PART 4 — DEPLOY  (~15 min)
+════════════════════════════════════════════════════════
+
+Step 4.1  Open the deploy.sh file and set your values
+  → File: C:\Users\TEJAS\Desktop\Compliance\deploy.sh
+  → Edit these 3 lines at the top:
+       PROJECT_ID="your-gcp-project-id"       <- from Step 1.1
+       REGION="europe-west2"                   <- keep this (UK region)
+       NOTIFICATION_EMAIL="your@email.com"     <- your email for alerts
+
+Step 4.2  Run the deploy script
+  → Open Command Prompt in the Compliance folder
+  → Run:
+       bash deploy.sh
+  → The script will:
+       • Enable all Google Cloud APIs
+       • Create a service account
+       • Store credentials in Secret Manager
+       • Build the Docker container
+       • Deploy to Cloud Run
+       • Set up Monday 8am scheduler
+  → When prompted, paste the IDs from Steps 2.2 and 3.1 and 3.2
+
+Step 4.3  Share resources with the service account
+  → After deploy.sh finishes, it prints the service account email
+  → Share these with that email:
+       • Google Drive upload folder → Editor access
+       • LKN Compliance Results Sheet → Editor access
+       • Drop Account Mapping Sheet → Viewer access
+
+Step 4.4  Test the pipeline
+  → Run manually:
+       gcloud run jobs execute lkn-pipeline --region=europe-west2
+  → Check results at your Google Sheet (LKN Compliance Results)
+  → View logs:
+       gcloud run jobs executions list --job=lkn-pipeline --region=europe-west2
+
+
+════════════════════════════════════════════════════════
+PART 5 — LIVE DASHBOARD  (~10 min)
+════════════════════════════════════════════════════════
+
+Step 5.1  Push code to GitHub
+  → Create a new private repo at: https://github.com/new
+  → Name it: lkn-compliance
+  → Upload these files:
+       dashboard_cloud.py
+       requirements_cloud.txt
+       (do NOT upload google_credentials.json or any .xlsx files)
+  → Create a file called .streamlit/secrets.toml with:
+       GOOGLE_CREDENTIALS_JSON = '{ ... paste your service account JSON here ... }'
+       RESULTS_SHEET_ID = "your-results-sheet-id"
+  → Add .streamlit/secrets.toml to .gitignore (never commit secrets to GitHub)
+
+Step 5.2  Deploy to Streamlit Community Cloud
+  → Go to: https://share.streamlit.io
+  → Sign in with GitHub
+  → Click "New app"
+  → Repository: your lkn-compliance repo
+  → Main file: dashboard_cloud.py
+  → Click "Advanced settings" → paste secrets from secrets.toml
+  → Click "Deploy"
+  → Your dashboard is live at: https://YOUR-NAME-lkn-compliance.streamlit.app
+
+Step 5.3  Share the dashboard URL
+  → No login required — anyone with the URL can view
+  → Bookmark it for your team
+
+
+════════════════════════════════════════════════════════
+WEEKLY WORKFLOW  (30 seconds per week)
+════════════════════════════════════════════════════════
+
+Every week (e.g. Monday morning):
+  1. Download Items-wise report from Urban Piper → drag to LKN-Weekly-Uploads folder
+  2. Download Options-wise report → drag to LKN-Weekly-Uploads folder
+  3. Download Bidfood processed_data → drag to LKN-Weekly-Uploads folder
+
+That's it. The rest happens automatically:
+  → Cloud Scheduler triggers at 8am
+  → Cloud Run reads the files
+  → Runs all 3 engines
+  → Writes results to Google Sheets
+  → Dashboard updates automatically
+  → Old files archived to /archive subfolder in Drive
+
+
+════════════════════════════════════════════════════════
+TROUBLESHOOTING
+════════════════════════════════════════════════════════
+
+Pipeline didn't run?
+  → Check logs: gcloud run jobs executions list --job=lkn-pipeline --region=europe-west2
+  → Look for ERROR lines in the logs
+
+Dashboard shows no data?
+  → Check that the pipeline has run at least once (see Run Log tab)
+  → Verify RESULTS_SHEET_ID is correct in Streamlit secrets
+
+File not found error?
+  → Check file name contains 'processed_data', 'Items-wise', or 'Options-wise'
+  → Make sure files are in the root of the LKN-Weekly-Uploads folder
+
+Trigger pipeline manually:
+  → gcloud run jobs execute lkn-pipeline --region=europe-west2
+
+Change schedule (e.g. Wednesday at 9am instead of Monday 8am):
+  → gcloud scheduler jobs update http lkn-weekly-trigger
+       --schedule="0 9 * * 3" --location=europe-west2
+
+
+FILES CREATED IN THIS SETUP
+════════════════════════════════════════════════════════
+  run_pipeline_cloud.py   — Cloud Run job (automatic processing)
+  dashboard_cloud.py      — Streamlit dashboard (reads from Google Sheets)
+  Dockerfile              — packages the pipeline into a container
+  cloudbuild.yaml         — builds and deploys the container
+  requirements_cloud.txt  — Python dependencies for cloud
+  deploy.sh               — one-command deployment script
+  CLOUD_SETUP_GUIDE.txt   — this file

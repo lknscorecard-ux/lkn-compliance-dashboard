@@ -284,10 +284,13 @@ def packaging_compliance(
                  len(req_agg), req_agg["Site_Key"].nunique())
 
     # ── Aggregate ordered units per Site_Key + SKU ────────────────────────────
+    _agg_dict = {"Ordered_Units": ("Total_Units", "sum")}
+    if "Total_Cases" in site_packaging.columns:
+        _agg_dict["Ordered_Cases"] = ("Total_Cases", "sum")
     ord_agg = (
         site_packaging
         .groupby(["Site_Key", "SKU", "Recipe_Name", "Product_Name"], dropna=False)
-        .agg(Ordered_Units=("Total_Units", "sum"))
+        .agg(**_agg_dict)
         .reset_index()
     )
 
@@ -326,13 +329,26 @@ def packaging_compliance(
         lambda g: "Compliant" if g >= 0 else "Non-Compliant"
     )
 
+    # Cases columns — derive units-per-case from Ordered_Units / Ordered_Cases
+    if "Ordered_Cases" in pkg_comp.columns:
+        pkg_comp["Ordered_Cases"] = pd.to_numeric(pkg_comp["Ordered_Cases"], errors="coerce").fillna(0)
+        _u = pkg_comp["Ordered_Units"]
+        _c = pkg_comp["Ordered_Cases"]
+        _upc = (_u / _c).where(_c > 0)  # units per case
+        pkg_comp["Gap_Cases"] = (pkg_comp["Gap"] / _upc).round(2)
+        pkg_comp["Ordered_Cases"] = pkg_comp["Ordered_Cases"].round(2)
+
     # Fill display columns
     if "Ingredient"   not in pkg_comp.columns: pkg_comp["Ingredient"]   = ""
     if "Product_Name" not in pkg_comp.columns: pkg_comp["Product_Name"] = ""
     pkg_comp["Ingredient"]   = pkg_comp["Ingredient"].fillna(pkg_comp.get("Recipe_Name", ""))
     pkg_comp["Product_Name"] = pkg_comp["Product_Name"].fillna("")
 
-    for c in COLS:
+    COLS_OUT = COLS + (
+        ["Ordered_Cases", "Gap_Cases"]
+        if "Ordered_Cases" in pkg_comp.columns else []
+    )
+    for c in COLS_OUT:
         if c not in pkg_comp.columns:
             pkg_comp[c] = ""
 
@@ -343,7 +359,7 @@ def packaging_compliance(
         int((pkg_comp["Status"] == "Non-Compliant").sum()),
     )
 
-    return pkg_comp[COLS].sort_values(["Site_Key", "SKU"]).reset_index(drop=True)
+    return pkg_comp[COLS_OUT].sort_values(["Site_Key", "SKU"]).reset_index(drop=True)
 
 
 def packaging_site_summary(pkg_compliance: pd.DataFrame) -> pd.DataFrame:

@@ -504,11 +504,7 @@ HAS_PORTIONS = ("Portion_Gap" in compliance.columns
 # ── Last run banner ────────────────────────────────────────────────────────────
 if not run_log.empty:
     last = run_log.iloc[-1]
-    st.markdown(
-        f"**Last run:** {last.get('Timestamp','–')}  &nbsp;|&nbsp;  "
-        f"**Bidfood:** {last.get('Bidfood File','–')}  &nbsp;|&nbsp;  "
-        f"**Items:** {last.get('Items File','–')}"
-    )
+    st.markdown(f"**Last run:** {last.get('Timestamp','–')}")
 
 # ── LKN food SKU master list with display names ────────────────────────────────
 _SKU_NAME_MAP = {
@@ -564,7 +560,7 @@ if not site_summ.empty and "Compliance_%" in site_summ.columns:
 st.divider()
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🏪 Sites", "📦 Packaging (Opalion)", "📦 Packaging Detail"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Food Overview", "🏪 Sitewise Breakdown (Food)", "📦 Packaging Overview", "📦 Sitewise Breakdown (Packaging)"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — Overview
@@ -764,18 +760,18 @@ with tab1:
             _disp["Compliant SKUs"] = _disp["Surplus"]
         # Join Last Order Date from mapping sheet
         if _site_key_to_last_order and "Site_Key" in _disp.columns:
-            _disp["Last Order Date"] = (
+            _disp["Last Order Date (W/C)"] = (
                 _disp["Site_Key"].astype(str).map(_site_key_to_last_order).fillna("—")
             )
         # Select and rename columns for display
         _col_map = {
-            "Rank":             "Rank",
-            "Store_Name":       "Store",
-            "Compliant SKUs":   "Compliant SKUs",
-            "Deficit":          "Non-Compliant SKUs",
-            "Total_SKUs":       "Total SKUs",
-            "Compliance_%":     "Compliance %",
-            "Last Order Date":  "Last Order Date",
+            "Rank":                  "Rank",
+            "Store_Name":            "Store",
+            "Compliant SKUs":        "Compliant SKUs",
+            "Deficit":               "Non-Compliant SKUs",
+            "Total_SKUs":            "Total SKUs",
+            "Compliance_%":          "Compliance %",
+            "Last Order Date (W/C)": "Last Order Date (W/C)",
         }
         _disp = _disp[[c for c in _col_map if c in _disp.columns]].rename(columns=_col_map)
         _int_cols = [c for c in ["Rank","Compliant SKUs","Non-Compliant SKUs","Total SKUs"] if c in _disp.columns]
@@ -1192,14 +1188,14 @@ with tab3:
                 st.info("No site summary data.")
 
         with ch2:
-            st.subheader("Top Non-Compliant Packaging Items")
+            st.subheader("Top 5 Non-Compliant Packaging Items")
             if not pkg_comp.empty and "Status" in pkg_comp.columns:
                 _pkg_nc = pkg_comp[pkg_comp["Status"] == "Non-Compliant"].copy()
                 if not _pkg_nc.empty and "Ingredient" in _pkg_nc.columns:
                     _pkg_nc["Gap"] = pd.to_numeric(_pkg_nc.get("Gap", 0), errors="coerce")
                     _pkg_top_nc = (
                         _pkg_nc.groupby("Ingredient")["Gap"]
-                        .sum().sort_values().head(10).reset_index()
+                        .sum().sort_values().head(5).reset_index()
                     )
                     _fig_pkg_bar = px.bar(
                         _pkg_top_nc, x="Gap", y="Ingredient", orientation="h",
@@ -1213,23 +1209,65 @@ with tab3:
             else:
                 st.info("No packaging compliance data.")
 
-        # ── Second charts row: Top Compliant Items ────────────────────────────
+        # ── Second charts row: Top 5 Compliant Items ─────────────────────────
         if not pkg_comp.empty and "Status" in pkg_comp.columns:
             _pkg_c = pkg_comp[pkg_comp["Status"] == "Compliant"].copy()
             if not _pkg_c.empty and "Ingredient" in _pkg_c.columns:
                 _pkg_c["Gap"] = pd.to_numeric(_pkg_c.get("Gap", 0), errors="coerce")
                 _pkg_top_c = (
                     _pkg_c.groupby("Ingredient")["Gap"]
-                    .sum().sort_values(ascending=False).head(10).reset_index()
+                    .sum().sort_values(ascending=False).head(5).reset_index()
                 )
-                st.subheader("Top Compliant Packaging Items")
+                st.subheader("Top 5 Compliant Packaging Items")
                 _fig_pkg_comp = px.bar(
                     _pkg_top_c, x="Gap", y="Ingredient", orientation="h",
                     color_discrete_sequence=["#538135"],
                     labels={"Gap": "Ordered vs Used (Variance)", "Ingredient": ""},
                 )
-                _fig_pkg_comp.update_layout(height=320, margin=dict(t=10, b=0, l=0, r=0))
+                _fig_pkg_comp.update_layout(height=220, margin=dict(t=10, b=0, l=0, r=0))
                 st.plotly_chart(_fig_pkg_comp, use_container_width=True)
+
+        # ── Top 10 Compliant / Non-Compliant Sites ────────────────────────────
+        if not pkg_summ.empty and "Compliance_%" in pkg_summ.columns:
+            _ps = pkg_summ.copy()
+            _ps["Compliance_%"] = pd.to_numeric(_ps["Compliance_%"], errors="coerce").fillna(0)
+            # Resolve store names
+            _ps_sk = next((c for c in ["Site_Key", "Store_Name"] if c in _ps.columns), None)
+            if _ps_sk:
+                _ps["_store"] = _ps[_ps_sk].astype(str).map(_combined_store_map).fillna(_ps[_ps_sk])
+            else:
+                _ps["_store"] = _ps.index.astype(str)
+
+            _st10c, _st10nc = st.columns(2)
+            with _st10c:
+                st.subheader("🏆 Top 10 Compliant Sites (Packaging)")
+                _top10_pkg = _ps.nlargest(10, "Compliance_%").sort_values("Compliance_%", ascending=True)
+                _fig_t10 = px.bar(
+                    _top10_pkg, x="Compliance_%", y="_store", orientation="h",
+                    color="Compliance_%",
+                    color_continuous_scale=[[0, "#92D050"], [1, "#375623"]],
+                    text=[f"{v:.1f}%" for v in _top10_pkg["Compliance_%"]],
+                    labels={"Compliance_%": "Compliance %", "_store": ""},
+                )
+                _fig_t10.update_traces(textposition="auto")
+                _fig_t10.update_layout(height=380, margin=dict(t=0, b=0, l=0, r=10),
+                                       coloraxis_showscale=False,
+                                       xaxis=dict(range=[0, 105], fixedrange=True))
+                st.plotly_chart(_fig_t10, use_container_width=True)
+
+            with _st10nc:
+                st.subheader("⚠️ Bottom 10 Sites (Packaging)")
+                _bot10_pkg = _ps.nsmallest(10, "Compliance_%").sort_values("Compliance_%", ascending=False)
+                _fig_b10 = px.bar(
+                    _bot10_pkg, x="Compliance_%", y="_store", orientation="h",
+                    color_discrete_sequence=["#C00000"],
+                    text=[f"{v:.1f}%" for v in _bot10_pkg["Compliance_%"]],
+                    labels={"Compliance_%": "Compliance %", "_store": ""},
+                )
+                _fig_b10.update_traces(textposition="auto")
+                _fig_b10.update_layout(height=380, margin=dict(t=0, b=0, l=0, r=10),
+                                       xaxis=dict(range=[0, 105], fixedrange=True))
+                st.plotly_chart(_fig_b10, use_container_width=True)
 
         st.divider()
 
@@ -1269,16 +1307,20 @@ with tab3:
                                                 .map(_combined_store_map)
                                                 .fillna(pd.Series(_pk_sites[:len(_pkg_disp)])))
 
-            # Build final display: Rank | Store Name | Compliant | Non-Compliant | Total_Items | Compliance_%
+            # Build final display: Rank | Store Name | Compliant SKU | Non-Compliant SKU | Total_Items | Compliance_%
             _disp_cols = []
             for _c in ["Store Name", "Compliant", "Non-Compliant", "Total_Items", "Compliance_%"]:
                 if _c in _pkg_disp.columns:
                     _disp_cols.append(_c)
             _pkg_disp = _pkg_disp[_disp_cols].copy()
+            _pkg_disp = _pkg_disp.rename(columns={
+                "Compliant":     "Compliant SKU",
+                "Non-Compliant": "Non-Compliant SKU",
+            })
             _pkg_disp.insert(0, "Rank", range(1, len(_pkg_disp) + 1))
 
             # Round counts to whole numbers
-            for _rc in ["Compliant", "Non-Compliant", "Total_Items"]:
+            for _rc in ["Compliant SKU", "Non-Compliant SKU", "Total_Items"]:
                 if _rc in _pkg_disp.columns:
                     _pkg_disp[_rc] = _pkg_disp[_rc].round(0).astype("Int64")
 
@@ -1478,14 +1520,18 @@ with tab4:
             "Opening_Units":  "Opening Stock (Carry-forward)",
             "Required_Units": "Stock Used",
             "Ordered_Units":  "Stock Ordered from Opalion",
+            "Ordered_Cases":  "Ordered Cases (Packaging)",
             "Gap":            "Ordered vs Used (Variance)",
+            "Gap_Cases":      "Ordered vs Used (Variance) Cases",
             "Closing_Units":  "Closing Stock",
         }
         # Show Store Name + SKU Name; exclude raw Site_Key, AM, Ingredient, Product_Name
         _pd_show_raw = [c for c in [
             "Week_Commencing", "Store Name", "SKU", "SKU Name",
-            "Opening_Units", "Required_Units", "Ordered_Units",
-            "Gap", "Closing_Units", "Status",
+            "Opening_Units", "Required_Units",
+            "Ordered_Units", "Ordered_Cases",
+            "Gap", "Gap_Cases",
+            "Closing_Units", "Status",
         ] if c in _pd_disp.columns]
 
         _pd_disp_show = _pd_disp[_pd_show_raw].rename(columns=_pd_col_rename).copy()
@@ -1493,7 +1539,7 @@ with tab4:
         # Coerce numeric columns to float so the formatter never sees strings
         _pd_num_display_cols = [_pd_col_rename.get(c, c) for c in
                                 ["Opening_Units", "Required_Units", "Ordered_Units",
-                                 "Gap", "Closing_Units"]]
+                                 "Ordered_Cases", "Gap", "Gap_Cases", "Closing_Units"]]
         for _c in _pd_num_display_cols:
             if _c in _pd_disp_show.columns:
                 _pd_disp_show[_c] = pd.to_numeric(_pd_disp_show[_c], errors="coerce")

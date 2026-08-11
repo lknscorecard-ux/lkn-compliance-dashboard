@@ -1,0 +1,75 @@
+SETUP GUIDE — LKN Compliance Dashboard
+========================================
+
+STEP 1 — Install Python dependencies
+--------------------------------------
+Open Command Prompt in the Compliance folder and run:
+
+  pip install streamlit pandas plotly openpyxl xlsxwriter python-calamine requests
+
+(Optional — only needed for private Google Sheets with service account)
+  pip install gspread google-auth
+
+
+STEP 2 — Prepare your Google Sheet (Drop Account Mapping)
+-----------------------------------------------------------
+1. Open your "Bidfood Drop Account Mapping" Google Sheet
+2. Click Share → Change to "Anyone with the link" → Viewer
+3. Copy the URL from the address bar — it looks like:
+   https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5.../edit
+4. Paste this URL into the dashboard sidebar when you run it
+
+The sheet will be read LIVE every time you run the analysis.
+No need to download or copy the file manually.
+
+
+STEP 3 — Run the dashboard
+----------------------------
+Open Command Prompt in the Compliance folder:
+
+  streamlit run dashboard.py
+
+A browser window will open automatically at http://localhost:8501
+
+
+STEP 4 — Weekly workflow
+--------------------------
+Every week:
+1. Download Items-wise report from Urban Piper
+2. Download Options-wise report from Urban Piper
+3. Download Bidfood processed data (orders export)
+4. Open dashboard (streamlit run dashboard.py)
+5. Upload the 3 files in the sidebar
+6. Paste the Google Sheet URL (or it stays remembered)
+7. Click "Run Analysis"
+8. View results and download Excel reports
+
+
+FILES IN THIS FOLDER
+---------------------
+dashboard.py           — Main Streamlit app (run this)
+config.py              — Settings (Google Sheet URL, file paths)
+gsheet_client.py       — Google Sheets live reader
+engine_recipe.py       — System B Part 1: PLU matching
+engine_ingredient.py   — System B Part 2: Ingredient requirements
+engine_bidfood.py      — System A: Bidfood stock
+engine_compliance.py   — System C: Gap calculation
+requirements.txt       — Python package dependencies
+
+STATIC FILES (must stay in this folder)
+-----------------------------------------
+PLU_Mapping_Complete.xlsx
+Recipe builder.xlsx
+
+
+OPTIONAL — Private Google Sheet (service account)
+---------------------------------------------------
+If your Google Sheet is NOT publicly shared:
+1. Go to https://console.cloud.google.com
+2. Create a project → Enable "Google Sheets API"
+3. Create a Service Account → Download credentials JSON
+4. Rename the file to: google_credentials.json
+5. Place it in the Compliance folder
+6. Share your Google Sheet with the service account email address
+
+The dashboard will automatically detect the credentials file and use it.

@@ -24,11 +24,12 @@ _SAUCE_KW = [
 ]
 
 BRAND_SHEETS = {
-    "Hot Chick":  "Hot Chick",
-    "WTF":        "WTF",
-    "Korea Town": "Koreatown",
-    "Wing Fest":  "Wing Fest",
-    "Kuro Smash": "Kurosmash",
+    "Hot Chick":      "Hot Chick",
+    "WTF":            "WTF",
+    "Korea Town":     "Koreatown",
+    "Wing Fest":      "Wing Fest",
+    "Kuro Smash":     "Kurosmash",
+    "Twisted London": "Twisted London",
 }
 
 
