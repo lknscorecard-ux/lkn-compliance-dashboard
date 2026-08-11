@@ -1231,10 +1231,15 @@ with tab3:
         if not pkg_summ.empty and "Compliance_%" in pkg_summ.columns:
             _ps = pkg_summ.copy()
             _ps["Compliance_%"] = pd.to_numeric(_ps["Compliance_%"], errors="coerce").fillna(0)
-            # Resolve store names
+            # Resolve store names using already-available lookups
+            _ps_early_store_map = {}
+            if not compliance.empty and "Site_Key" in compliance.columns and "Store_Name" in compliance.columns:
+                _ps_early_store_map = compliance.groupby("Site_Key")["Store_Name"].first().to_dict()
+            if _site_key_to_store:
+                _ps_early_store_map.update(_site_key_to_store)
             _ps_sk = next((c for c in ["Site_Key", "Store_Name"] if c in _ps.columns), None)
             if _ps_sk:
-                _ps["_store"] = _ps[_ps_sk].astype(str).map(_combined_store_map).fillna(_ps[_ps_sk])
+                _ps["_store"] = _ps[_ps_sk].astype(str).map(_ps_early_store_map).fillna(_ps[_ps_sk])
             else:
                 _ps["_store"] = _ps.index.astype(str)
 
