@@ -1557,7 +1557,7 @@ with tab4:
                 {c: lambda v: "—" if pd.isna(v) else f"{v:.2f}" for c in _pd_fmt_cols}
             )
 
-        st.dataframe(_pd_styled, use_container_width=True, height=520)
+        st.dataframe(_pd_styled, use_container_width=True, height=520, hide_index=True)
         st.caption(f"{len(_pd_disp_show):,} rows shown")
         st.download_button(
             "⬇ Download Packaging Detail (CSV)",
