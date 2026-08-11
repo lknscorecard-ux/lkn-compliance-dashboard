@@ -1530,7 +1530,7 @@ with tab4:
             "Required_Units",
             "Ordered_Units", "Ordered_Cases",
             "Gap", "Gap_Cases",
-            "Closing_Units", "Status",
+            "Status",
         ] if c in _pd_disp.columns]
 
         _pd_disp_show = _pd_disp[_pd_show_raw].rename(columns=_pd_col_rename).copy()
