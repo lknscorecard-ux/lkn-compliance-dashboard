@@ -455,20 +455,14 @@ if not bidfood_s.empty:
     else:
         _bf_pk["_pack_g"] = float("nan")
 
+    # Group by SKU only so ALL sites get a pack size, not just those that ordered
     _pk_map = (
         _bf_pk.dropna(subset=["_pack_g"])
         .query("_pack_g > 0")
-        .groupby(["Site_Key", "Product Code"])["_pack_g"]
-        .first()
+        .groupby("Product Code")["_pack_g"]
+        .median()
     )
-    _c_keys = list(zip(
-        compliance["Site_Key"].astype(str).str.strip(),
-        compliance["SKU"].astype(str).str.strip(),
-    ))
-    _pk_vals = pd.to_numeric(
-        pd.Series([_pk_map.get(k, float("nan")) for k in _c_keys], index=compliance.index),
-        errors="coerce",
-    )
+    _pk_vals = compliance["SKU"].astype(str).str.strip().map(_pk_map)
     _valid_pk = _pk_vals.notna() & (_pk_vals > 0)
     for _raw_col, _case_col in [
         ("Required_Qty", "Cases_Required"),
