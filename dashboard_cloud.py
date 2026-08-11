@@ -1517,17 +1517,17 @@ with tab4:
 
         _pd_col_rename = {
             "Opening_Units":  "Opening Stock (Carry-forward)",
-            "Required_Units": "Stock Used",
-            "Ordered_Units":  "Stock Ordered from Opalion",
+            "Required_Units": "Stock Consumed (Units)",
+            "Ordered_Units":  "Stock Ordered (Units)",
             "Ordered_Cases":  "Ordered Cases (Packaging)",
-            "Gap":            "Ordered vs Used (Variance)",
-            "Gap_Cases":      "Ordered vs Used (Variance) Cases",
+            "Gap":            "Ordered vs Consumed (Variance)",
+            "Gap_Cases":      "Ordered vs Consumed (Variance) Cases",
             "Closing_Units":  "Closing Stock",
         }
-        # Show Store Name + SKU Name; exclude raw Site_Key, AM, Ingredient, Product_Name
+        # Show Store Name + SKU Name; exclude Opening_Units, raw Site_Key, AM, Ingredient, Product_Name
         _pd_show_raw = [c for c in [
             "Week_Commencing", "Store Name", "SKU", "SKU Name",
-            "Opening_Units", "Required_Units",
+            "Required_Units",
             "Ordered_Units", "Ordered_Cases",
             "Gap", "Gap_Cases",
             "Closing_Units", "Status",
