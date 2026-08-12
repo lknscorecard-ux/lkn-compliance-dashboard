@@ -491,6 +491,30 @@ if ("Portion_Gap" in compliance.columns
     _within2  = (compliance["Status"] == "Non-Compliant") & _has_tol & (_pg2 >= -_tol2)
     compliance.loc[_within2, "Status"] = "Compliant"
 
+# ── Commission Loss (3% of shortfall value for Non-Compliant rows) ────────────
+# Unit Price per case = Total_Spend_GBP / Cases_Ordered (SKU-level median from bidfood_s)
+_sku_unit_price = {}
+if not bidfood_s.empty and "Product Code" in bidfood_s.columns:
+    _bf_up = bidfood_s.copy()
+    _bf_up["Product Code"]  = _bf_up["Product Code"].astype(str).str.strip()
+    _bf_up["_cases"] = pd.to_numeric(_bf_up.get("Cases_Ordered",    pd.Series()), errors="coerce").fillna(0)
+    _bf_up["_spend"] = pd.to_numeric(_bf_up.get("Total_Spend_GBP",  pd.Series()), errors="coerce").fillna(0)
+    _bf_grp = _bf_up.groupby("Product Code").agg(_cases=("_cases","sum"), _spend=("_spend","sum")).reset_index()
+    _bf_grp["_unit_price"] = (_bf_grp["_spend"] / _bf_grp["_cases"]).where(_bf_grp["_cases"] > 0)
+    _sku_unit_price = _bf_grp.set_index("Product Code")["_unit_price"].dropna().to_dict()
+
+if ("Cases_Gap" in compliance.columns and "Status" in compliance.columns
+        and "SKU" in compliance.columns):
+    _nc_mask  = compliance["Status"] == "Non-Compliant"
+    _c_gap    = pd.to_numeric(compliance["Cases_Gap"], errors="coerce").fillna(0)
+    _up_vals  = compliance["SKU"].astype(str).str.strip().map(_sku_unit_price).fillna(0)
+    compliance["Commission_Loss"] = 0.0
+    compliance.loc[_nc_mask, "Commission_Loss"] = (
+        _c_gap[_nc_mask].clip(upper=0).abs() * _up_vals[_nc_mask] * 0.03
+    ).round(2)
+else:
+    compliance["Commission_Loss"] = 0.0
+
 # ── Derived flags ──────────────────────────────────────────────────────────────
 HAS_PORTIONS = ("Portion_Gap" in compliance.columns
                 and pd.to_numeric(compliance["Portion_Gap"], errors="coerce").abs().sum() > 0)
@@ -571,7 +595,11 @@ with tab1:
         _bf_spend_src = _bf_spend_src[_bf_spend_src["Site_Key"].isin(_required_sites)]
     _bidfood_spend   = (pd.to_numeric(_bf_spend_src["Total_Spend_GBP"], errors="coerce").sum()
                         if not _bf_spend_src.empty and "Total_Spend_GBP" in _bf_spend_src.columns else 0)
-    k1, k2, k3, k4, k5 = st.columns(5)
+    _total_commission_loss = (
+        pd.to_numeric(compliance.get("Commission_Loss", pd.Series()), errors="coerce").sum()
+        if not compliance.empty else 0
+    )
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.metric("Sites Monitored",   _total_sites)
     k2.metric("Avg Compliance",    f"{_avg_comp:.1f}%")
     k3.metric("Compliant Sites",   _compliant_sites,
@@ -580,6 +608,8 @@ with tab1:
               delta=f"{_noncomp_sites} need attention" if _noncomp_sites else "All clear",
               delta_color="inverse" if _noncomp_sites else "off")
     k5.metric("Bidfood Spend",     f"£{_bidfood_spend:,.0f}")
+    k6.metric("Commission Loss",   f"£{_total_commission_loss:,.2f}",
+              delta="3% on non-compliant shortfall", delta_color="inverse")
     st.divider()
 
     # ── Row 1: Donut | Bottom 10 Sites | Top 10 Sites ─────────────────────────
@@ -900,7 +930,11 @@ with tab2:
             )
             st.divider()
             st.caption(f"📊 KPIs for: **{_panel_label}**")
-            _mk1, _mk2, _mk3, _mk4, _mk5 = st.columns(5)
+            _f_comm_loss = 0.0
+            if not compliance.empty and "Commission_Loss" in compliance.columns and len(_filtered_site_keys) > 0:
+                _f_comm_df = compliance[compliance["Site_Key"].astype(str).isin(_filtered_site_keys)]
+                _f_comm_loss = pd.to_numeric(_f_comm_df["Commission_Loss"], errors="coerce").sum()
+            _mk1, _mk2, _mk3, _mk4, _mk5, _mk6 = st.columns(6)
             _mk1.metric("Sites",            _f_total)
             _mk2.metric("Avg Compliance",   f"{_f_avg:.1f}%")
             _mk3.metric("Compliant (≥70%)", _f_comp,
@@ -909,6 +943,8 @@ with tab2:
                         delta=f"{_f_noncomp} need attention" if _f_noncomp else "All clear",
                         delta_color="inverse" if _f_noncomp else "off")
             _mk5.metric("Bidfood Spend",    f"£{_f_spend:,.0f}")
+            _mk6.metric("Commission Loss",  f"£{_f_comm_loss:,.2f}",
+                        delta="3% on non-compliant shortfall", delta_color="inverse")
             st.divider()
 
         def _status_bg(val):
@@ -929,6 +965,7 @@ with tab2:
             "Cases_Required":         "Portions Used (Cases)",
             "Cases_Ordered":          "Portions Ordered (Cases)",
             "Cases_Gap":              "Ordered vs Used (Variance) (Cases)",
+            "Commission_Loss":        "Commission Loss (£)",
             "Status":                 "Compliance Status",
         }
         _all_possible = [c for c in
@@ -938,7 +975,7 @@ with tab2:
                           "Portion_Required", "Cases_Required",
                           "Portion_Ordered",  "Cases_Ordered",
                           "Portion_Gap",      "Cases_Gap",
-                          "Carry_Forward_Portions", "Status"]
+                          "Carry_Forward_Portions", "Commission_Loss", "Status"]
                          if c in _disp2.columns and c not in _PERM_HIDDEN]
 
         # Display names for the toggle UI (same as _COL_RENAME where applicable)
