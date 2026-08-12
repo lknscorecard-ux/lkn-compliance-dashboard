@@ -1059,6 +1059,8 @@ with tab2:
         _detail_fmt = {c: "{:.1f}" for c in _num_cols_1dp}
         _detail_fmt.update({c: "{:.0f}" for c in _num_cols_0dp})
         _detail_fmt.update({c: "{:.2f}" for c in _num_cols_2dp})
+        if "Commission Loss (£)" in _show_renamed:
+            _detail_fmt["Commission Loss (£)"] = "{:.2f}"
         _detail_styled = _disp2_show.style.format(_detail_fmt, na_rep="—")
         _status_disp = _COL_RENAME.get("Status", "Status") if "Status" in _show_cols else None
         if _status_disp and _status_disp in _disp2_show.columns:
