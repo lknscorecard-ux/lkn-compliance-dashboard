@@ -1223,7 +1223,7 @@ with tab3:
         st.divider()
 
         # ── Charts row ────────────────────────────────────────────────────────
-        ch1, ch2 = st.columns([1, 2])
+        ch1, ch2, ch3 = st.columns([1, 1.5, 1.5])
 
         with ch1:
             st.subheader("Site Compliance")
@@ -1271,23 +1271,25 @@ with tab3:
             else:
                 st.info("No packaging compliance data.")
 
-        # ── Second charts row: Top 5 Compliant Items ─────────────────────────
-        if not pkg_comp.empty and "Status" in pkg_comp.columns:
-            _pkg_c = pkg_comp[pkg_comp["Status"] == "Compliant"].copy()
-            if not _pkg_c.empty and "Ingredient" in _pkg_c.columns:
-                _pkg_c["Gap"] = pd.to_numeric(_pkg_c.get("Gap", 0), errors="coerce")
-                _pkg_top_c = (
-                    _pkg_c.groupby("Ingredient")["Gap"]
-                    .sum().sort_values(ascending=False).head(5).reset_index()
-                )
-                st.markdown("<p style='font-size:1.1rem;font-weight:600;white-space:nowrap;'>Top 5 Compliant Packaging Items</p>", unsafe_allow_html=True)
-                _fig_pkg_comp = px.bar(
-                    _pkg_top_c, x="Gap", y="Ingredient", orientation="h",
-                    color_discrete_sequence=["#538135"],
-                    labels={"Gap": "Ordered vs Used (Variance)", "Ingredient": ""},
-                )
-                _fig_pkg_comp.update_layout(height=220, margin=dict(t=10, b=0, l=0, r=0))
-                st.plotly_chart(_fig_pkg_comp, use_container_width=True)
+        with ch3:
+            st.markdown("<p style='font-size:1.1rem;font-weight:600;white-space:nowrap;'>Top 5 Compliant Packaging Items</p>", unsafe_allow_html=True)
+            if not pkg_comp.empty and "Status" in pkg_comp.columns:
+                _pkg_c = pkg_comp[pkg_comp["Status"] == "Compliant"].copy()
+                if not _pkg_c.empty and "Ingredient" in _pkg_c.columns:
+                    _pkg_c["Gap"] = pd.to_numeric(_pkg_c.get("Gap", 0), errors="coerce")
+                    _pkg_top_c = (
+                        _pkg_c.groupby("Ingredient")["Gap"]
+                        .sum().sort_values(ascending=False).head(5).reset_index()
+                    )
+                    _fig_pkg_comp = px.bar(
+                        _pkg_top_c, x="Gap", y="Ingredient", orientation="h",
+                        color_discrete_sequence=["#538135"],
+                        labels={"Gap": "Ordered vs Used (Variance)", "Ingredient": ""},
+                    )
+                    _fig_pkg_comp.update_layout(height=300, margin=dict(t=10, b=0, l=0, r=0))
+                    st.plotly_chart(_fig_pkg_comp, use_container_width=True)
+                else:
+                    st.success("No compliant packaging items this week.")
 
         # ── Top 10 Compliant / Non-Compliant Sites ────────────────────────────
         if not pkg_summ.empty and "Compliance_%" in pkg_summ.columns:
