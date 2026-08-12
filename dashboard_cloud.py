@@ -1250,7 +1250,7 @@ with tab3:
                 st.info("No site summary data.")
 
         with ch2:
-            st.subheader("Top 5 Non-Compliant Packaging Items")
+            st.markdown("<p style='font-size:1.1rem;font-weight:600;white-space:nowrap;'>Top 5 Non-Compliant Packaging Items</p>", unsafe_allow_html=True)
             if not pkg_comp.empty and "Status" in pkg_comp.columns:
                 _pkg_nc = pkg_comp[pkg_comp["Status"] == "Non-Compliant"].copy()
                 if not _pkg_nc.empty and "Ingredient" in _pkg_nc.columns:
@@ -1280,7 +1280,7 @@ with tab3:
                     _pkg_c.groupby("Ingredient")["Gap"]
                     .sum().sort_values(ascending=False).head(5).reset_index()
                 )
-                st.subheader("Top 5 Compliant Packaging Items")
+                st.markdown("<p style='font-size:1.1rem;font-weight:600;white-space:nowrap;'>Top 5 Compliant Packaging Items</p>", unsafe_allow_html=True)
                 _fig_pkg_comp = px.bar(
                     _pkg_top_c, x="Gap", y="Ingredient", orientation="h",
                     color_discrete_sequence=["#538135"],
