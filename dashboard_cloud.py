@@ -1086,34 +1086,6 @@ with tab2:
             key="sites_download",
         )
 
-        # ── Commission Loss by SKU ─────────────────────────────────────────────
-        if "Commission_Loss" in _disp2.columns:
-            _sku_comm = (
-                _disp2[_disp2["Commission_Loss"] > 0]
-                .groupby(["SKU", "Ingredient"], dropna=False)
-                .agg(
-                    Commission_Loss=("Commission_Loss", "sum"),
-                    Non_Compliant_Sites=("Commission_Loss", "count"),
-                )
-                .reset_index()
-                .sort_values("Commission_Loss", ascending=False)
-            )
-            _sku_comm["Commission_Loss"] = _sku_comm["Commission_Loss"].round(2)
-            _sku_comm = _sku_comm.rename(columns={
-                "SKU":                 "SKU",
-                "Ingredient":          "Ingredient",
-                "Commission_Loss":     "Commission Loss (£)",
-                "Non_Compliant_Sites": "Non-Compliant Sites",
-            })
-            if not _sku_comm.empty:
-                st.divider()
-                st.markdown("**Commission Loss by SKU** *(non-compliant sites only)*")
-                st.dataframe(
-                    _sku_comm.style.format({"Commission Loss (£)": "{:.2f}"}),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
         # ── When exactly one SKU is selected, show ingredient + bidfood detail ──
         _sel_skus = [_label_to_sku[l] for l in _sel_sku_ingr if l in _label_to_sku]
         if len(_sel_skus) == 1:
