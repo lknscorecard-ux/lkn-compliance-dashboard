@@ -135,6 +135,7 @@ def run(bf_df: pd.DataFrame, mapping_df: pd.DataFrame) -> tuple:
             Total_Ordered_Qty=("Total_Ordered_Qty", "sum"),
             Pack_Qty         =("Pack_Qty",          "first"),  # g per case (same for all rows with same Pack Size)
             Total_Spend_GBP  =("Total_Spend_GBP",   "sum"),
+            Unit_Price       =("Unit Price",         "median"),  # actual invoice price per case
         )
         .reset_index()
         .sort_values(["Site_Key","Product Code"])

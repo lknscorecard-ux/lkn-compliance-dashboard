@@ -496,12 +496,22 @@ if ("Portion_Gap" in compliance.columns
 _sku_unit_price = {}
 if not bidfood_s.empty and "Product Code" in bidfood_s.columns:
     _bf_up = bidfood_s.copy()
-    _bf_up["Product Code"]  = _bf_up["Product Code"].astype(str).str.strip()
-    _bf_up["_cases"] = pd.to_numeric(_bf_up.get("Cases_Ordered",    pd.Series()), errors="coerce").fillna(0)
-    _bf_up["_spend"] = pd.to_numeric(_bf_up.get("Total_Spend_GBP",  pd.Series()), errors="coerce").fillna(0)
-    _bf_grp = _bf_up.groupby("Product Code").agg(_cases=("_cases","sum"), _spend=("_spend","sum")).reset_index()
-    _bf_grp["_unit_price"] = (_bf_grp["_spend"] / _bf_grp["_cases"]).where(_bf_grp["_cases"] > 0)
-    _sku_unit_price = _bf_grp.set_index("Product Code")["_unit_price"].dropna().to_dict()
+    _bf_up["Product Code"] = _bf_up["Product Code"].astype(str).str.strip()
+    if "Unit_Price" in _bf_up.columns:
+        # Use actual invoice unit price (passed through from engine_bidfood)
+        _bf_grp2 = (
+            _bf_up.dropna(subset=["Unit_Price"])
+            .groupby("Product Code")["Unit_Price"]
+            .median()
+        )
+        _sku_unit_price = _bf_grp2.to_dict()
+    else:
+        # Fallback: derive from Total_Spend_GBP / Cases_Ordered
+        _bf_up["_cases"] = pd.to_numeric(_bf_up.get("Cases_Ordered",   pd.Series()), errors="coerce").fillna(0)
+        _bf_up["_spend"] = pd.to_numeric(_bf_up.get("Total_Spend_GBP", pd.Series()), errors="coerce").fillna(0)
+        _bf_grp = _bf_up.groupby("Product Code").agg(_cases=("_cases","sum"), _spend=("_spend","sum")).reset_index()
+        _bf_grp["_unit_price"] = (_bf_grp["_spend"] / _bf_grp["_cases"]).where(_bf_grp["_cases"] > 0)
+        _sku_unit_price = _bf_grp.set_index("Product Code")["_unit_price"].dropna().to_dict()
 
 if ("Cases_Gap" in compliance.columns and "Status" in compliance.columns
         and "SKU" in compliance.columns):
