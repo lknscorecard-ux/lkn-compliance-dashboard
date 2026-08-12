@@ -1385,11 +1385,12 @@ with tab3:
             _pkg_disp = _pkg_disp.rename(columns={
                 "Compliant":     "Compliant SKU",
                 "Non-Compliant": "Non-Compliant SKU",
+                "Total_Items":   "Total SKU's",
             })
             _pkg_disp.insert(0, "Rank", range(1, len(_pkg_disp) + 1))
 
             # Round counts to whole numbers
-            for _rc in ["Compliant SKU", "Non-Compliant SKU", "Total_Items"]:
+            for _rc in ["Compliant SKU", "Non-Compliant SKU", "Total SKU's"]:
                 if _rc in _pkg_disp.columns:
                     _pkg_disp[_rc] = _pkg_disp[_rc].round(0).astype("Int64")
 
