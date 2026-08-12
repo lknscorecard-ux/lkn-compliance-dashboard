@@ -1036,6 +1036,11 @@ with tab2:
             _show_cols_raw.append("Status")
         _show_cols = _show_cols_raw or ["SKU", "Ingredient", "Status"]  # fallback
 
+        # Commission_Loss always visible (insert before Status)
+        if "Commission_Loss" in _disp2.columns and "Commission_Loss" not in _show_cols:
+            _ins = _show_cols.index("Status") if "Status" in _show_cols else len(_show_cols)
+            _show_cols.insert(_ins, "Commission_Loss")
+
         # Apply display rename
         _disp2_show = _disp2[_show_cols].rename(columns={
             k: v for k, v in _COL_RENAME.items() if k in _show_cols
@@ -1068,6 +1073,7 @@ with tab2:
             "Portions Used (Cases)":                  "Portions used expressed as cases (packs) — Units ÷ pack size.",
             "Portions Ordered (Cases)":               "Portions ordered expressed as cases (packs) — Units ÷ pack size.",
             "Ordered vs Used (Variance) (Cases)":     "Variance expressed as cases. Positive = surplus cases, Negative = shortfall cases.",
+            "Commission Loss (£)":                    "3% of the shortfall value (cases short × unit price × 3%). Only applies to Non-Compliant rows.",
             "Compliance Status":                      "Compliant = ordering meets or exceeds usage. Non-Compliant = shortfall with no carried-forward stock to cover it.",
         }
         _col_config = {
