@@ -269,13 +269,26 @@ with h2:
         help="Set the week this Bidfood report covers before running the pipeline.",
         key="pipeline_wc_picker",
     )
-    if st.button("🔒 Run Pipeline (Locked)", type="primary", use_container_width=True, disabled=True):
-        with st.spinner("Triggering pipeline …"):
-            try:
-                _trigger_pipeline(wc_override=str(_wc_pick))
-                st.success(f"Pipeline started for W/C {_wc_pick} — results update in ~2 min.")
-            except Exception as e:
-                st.error(f"Failed: {e}")
+    _PIPELINE_PASSWORD = "LKN2024"
+    if st.button("▶ Run Pipeline", type="primary", use_container_width=True):
+        st.session_state["show_pipeline_pw"] = True
+    if st.session_state.get("show_pipeline_pw"):
+        _pw = st.text_input("Enter password to run pipeline:", type="password", key="pipeline_pw_input")
+        _col_ok, _col_cancel = st.columns(2)
+        if _col_ok.button("Confirm", key="pipeline_pw_ok"):
+            if _pw == _PIPELINE_PASSWORD:
+                st.session_state["show_pipeline_pw"] = False
+                with st.spinner("Triggering pipeline …"):
+                    try:
+                        _trigger_pipeline(wc_override=str(_wc_pick))
+                        st.success(f"Pipeline started for W/C {_wc_pick} — results update in ~2 min.")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+            else:
+                st.error("Incorrect password.")
+        if _col_cancel.button("Cancel", key="pipeline_pw_cancel"):
+            st.session_state["show_pipeline_pw"] = False
+            st.rerun()
 with h3:
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
