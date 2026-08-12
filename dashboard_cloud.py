@@ -269,7 +269,7 @@ with h2:
         help="Set the week this Bidfood report covers before running the pipeline.",
         key="pipeline_wc_picker",
     )
-    if st.button("▶ Run Pipeline", type="primary", use_container_width=True):
+    if st.button("🔒 Run Pipeline (Locked)", type="primary", use_container_width=True, disabled=True):
         with st.spinner("Triggering pipeline …"):
             try:
                 _trigger_pipeline(wc_override=str(_wc_pick))
